@@ -493,24 +493,28 @@ enum Chip8Version {
 }
 
 struct Chip8Config {
+    version: Chip8Version,
     debug: bool,
     step_mode: bool,
 }
 
 struct Chip8 {
-    version: Chip8Version,
+    // Config
     config: Chip8Config,
-    screen: Screen,
-    input: input::KeyEventHandler,
+    // CPU
     memory: [u8; Self::MEMORY_SIZE],
     pc_r: u16,                         // Program Counter
     index_r: u16,                      // Index Register
     gen_r: [u8; Self::REGISTER_COUNT], // General Purpose Registers
     stack: Vec<u16>,                   // Stack
-    paused: Arc<Mutex<bool>>,          // For step mode: whether execution is paused
-    step_requested: Arc<Mutex<bool>>,  // For step mode: whether a single step is requested
-                                       // delay timer
-                                       // sound timer
+    delay_timer: u8,
+    sound_timer: u8,
+    // I/O
+    screen: Screen,
+    input: input::KeyEventHandler,
+    // Debugging Utils
+    paused: Arc<Mutex<bool>>, // For step mode: whether execution is paused
+    step_requested: Arc<Mutex<bool>>, // For step mode: whether a single step is requested
 }
 
 impl Chip8 {
@@ -542,16 +546,11 @@ impl Chip8 {
     ];
     const BYTES_PER_FONT: u16 = 5;
 
-    fn new(
-        version: Chip8Version,
-        config: Chip8Config,
-        input_handler: input::KeyEventHandler,
-    ) -> Self {
+    fn new(config: Chip8Config, input_handler: input::KeyEventHandler) -> Self {
         let paused = Arc::new(Mutex::new(config.step_mode)); // Start paused if in step mode
         let step_requested = Arc::new(Mutex::new(false));
 
         let mut chip8 = Self {
-            version: version,
             config,
             screen: Screen::new(),
             input: input_handler,
@@ -562,6 +561,8 @@ impl Chip8 {
             stack: Vec::new(),
             paused,
             step_requested,
+            delay_timer: 0,
+            sound_timer: 0,
         };
 
         // Set up step mode callbacks if enabled
@@ -681,7 +682,7 @@ impl Chip8 {
                 *self.vf() = if vy > vx { 1 } else { 0 };
             }
             RegOperation::ShiftLeft => {
-                let val = if self.version == Chip8Version::COSMAC {
+                let val = if self.config.version == Chip8Version::COSMAC {
                     self.register_set(regx, vy);
                     vy
                 } else {
@@ -691,7 +692,7 @@ impl Chip8 {
                 self.register_set(regx, val << 1);
             }
             RegOperation::ShiftRight => {
-                let val = if self.version == Chip8Version::COSMAC {
+                let val = if self.config.version == Chip8Version::COSMAC {
                     self.register_set(regx, vy);
                     vy
                 } else {
@@ -793,7 +794,7 @@ impl Chip8 {
                     let value = self.load_from_addr(self.index_r + i as u16);
                     self.register_set(&Register(i), value);
                 }
-                if self.version == Chip8Version::COSMAC {
+                if self.config.version == Chip8Version::COSMAC {
                     self.index_r += reg.0 as u16 + 1;
                 }
             }
@@ -802,7 +803,7 @@ impl Chip8 {
                     let value = self.register_val(&Register(i));
                     self.store_in_addr(self.index_r + i as u16, value);
                 }
-                if self.version == Chip8Version::COSMAC {
+                if self.config.version == Chip8Version::COSMAC {
                     self.index_r += reg.0 as u16 + 1;
                 }
             }
@@ -811,7 +812,7 @@ impl Chip8 {
                     Self::FONT_START_ADDR + ((reg.0 & 0x0F) as u16 * Self::BYTES_PER_FONT);
             }
             JumpWithOffset(addr) => {
-                let addr_to_jump = if self.version == Chip8Version::COSMAC {
+                let addr_to_jump = if self.config.version == Chip8Version::COSMAC {
                     addr.0 + self.register_val(&Register(0)) as u16
                 } else {
                     // Strange quirk in newer interpreters where the addr was interpreted as XNN
@@ -864,9 +865,9 @@ impl Chip8 {
                 let random: u8 = rand::random();
                 self.register_set(reg, value.0 & random);
             }
-            SetSoundTimer(_reg) => { /* TODO */ }
-            SetDelayTimer(_reg) => { /* TODO */ }
-            GetDelayTimer(_reg) => { /* TODO */ }
+            SetSoundTimer(reg) => self.sound_timer = self.register_val(reg),
+            SetDelayTimer(reg) => self.delay_timer = self.register_val(reg),
+            GetDelayTimer(reg) => self.register_set(reg, self.delay_timer),
             // Takes the decimal digits of the value in reg and stores them in memory starting with
             // index
             BinaryDecimalConv(reg) => {
@@ -1067,6 +1068,15 @@ impl Chip8 {
                 continue;
             }
             self.execute_instruction_cycle();
+
+            // TODO: Refactor to be independent of cycles
+            if self.delay_timer > 0 {
+                self.delay_timer -= 1;
+            }
+            if self.sound_timer > 0 {
+                self.sound_timer -= 1;
+            }
+
             self.handle_cycle_timing(cycle_start, cycle_time);
         }
         crossterm::terminal::disable_raw_mode().unwrap();
@@ -1144,10 +1154,11 @@ fn main() -> io::Result<()> {
 
         // Create emulator
         let config = Chip8Config {
+            version: Chip8Version::COSMAC,
             debug: args.debug,
             step_mode: args.step,
         };
-        let mut chip8 = Chip8::new(Chip8Version::COSMAC, config, input_handler);
+        let mut chip8 = Chip8::new(config, input_handler);
         chip8.load_rom(&bytes);
         chip8.cycle();
     }
