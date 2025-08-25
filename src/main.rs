@@ -8,6 +8,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod input;
+
 struct Register(u8);
 impl Display for Register {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -189,7 +191,7 @@ impl Display for Instruction {
             RegOp(regop, regx, regy) => {
                 use RegOperation::*;
                 match regop {
-                   Set => write!(f, "{regx} {regop} {regy}"),
+                    Set => write!(f, "{regx} {regop} {regy}"),
                     // Equal
                     AND | OR | XOR | Add | Sub => write!(f, "{regx} = {regx} {regop} {regy}"),
                     SubInv => write!(f, "{regx} = {regy} {regop} {regx}"),
@@ -197,7 +199,7 @@ impl Display for Instruction {
                     ShiftLeft => write!(f, "Shift Left on {regx} {regy}"),
                     ShiftRight => write!(f, "Shift Right on {regx} {regy}"),
                 }
-            },
+            }
             SetRegImmediate(regx, value) => write!(f, "{regx} = {value}"),
             AddRegImmediate(regx, value) => write!(f, "{regx} = {regx} + {value}"),
             Random(regx, value) => write!(f, "{regx} = RANDOM & {value}"),
@@ -284,6 +286,8 @@ impl Instruction {
 
 struct Screen {
     pixels: [bool; Self::N_PIXELS as usize],
+    debug_info: String,
+    cpu_debug_info: String,
 }
 
 impl Screen {
@@ -298,6 +302,8 @@ impl Screen {
         execute!(std::io::stdout(), EnterAlternateScreen, Hide).expect("Could not create terminal");
         Self {
             pixels: [false; Self::N_PIXELS as usize],
+            debug_info: String::new(),
+            cpu_debug_info: String::new(),
         }
     }
 
@@ -326,9 +332,22 @@ impl Screen {
         // self.flush().unwrap();
     }
 
+    fn set_debug_info(&mut self, info: String) {
+        self.debug_info = info;
+    }
+
+    fn clear_debug_info(&mut self) {
+        self.debug_info.clear();
+    }
+
+    fn set_cpu_debug_info(&mut self, info: String) {
+        self.cpu_debug_info = info;
+    }
+
+
     // Draws to the console
     fn flush(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        use crossterm::{cursor::*, queue, style::*, terminal::*};
+        use crossterm::{cursor::*, queue, style::*};
         use std::io::stdout;
         let (term_width, term_height) = crossterm::terminal::size()?;
 
@@ -361,6 +380,29 @@ impl Screen {
             Print("Press 'Escape' to quit")
         )?;
 
+        // Add debug info at the bottom if available
+        let mut debug_line = offset_y + display_height + 3;
+        if !self.debug_info.is_empty() {
+            queue!(
+                stdout(),
+                MoveTo(offset_x, debug_line),
+                SetForegroundColor(Color::Yellow),
+                Print(format!("INPUT: {}", self.debug_info)),
+                ResetColor
+            )?;
+            debug_line += 1;
+        }
+        
+        if !self.cpu_debug_info.is_empty() {
+            queue!(
+                stdout(),
+                MoveTo(offset_x, debug_line),
+                SetForegroundColor(Color::Cyan),
+                Print(format!("CPU: {}", self.cpu_debug_info)),
+                ResetColor
+            )?;
+        }
+
         stdout().flush()?;
         Ok(())
     }
@@ -378,89 +420,7 @@ impl Drop for Screen {
     }
 }
 
-pub struct InputHandler {
-    keys: [bool; 16], // CHIP-8 has 16 keys (0-F)
-}
-
-impl InputHandler {
-    pub fn new() -> Self {
-        Self { keys: [false; 16] }
-    }
-
-    // Non-blocking input polling
-    pub fn update(&mut self) -> Result<bool, Box<dyn std::error::Error>> {
-        use crossterm::event;
-        use crossterm::event::*;
-        // Poll for events with timeout
-        while event::poll(Duration::from_millis(0))? {
-            if let Event::Key(key_event) = event::read()? {
-                match key_event.code {
-                    KeyCode::Esc => return Ok(false), // Quit
-                    _ => self.handle_key_event(key_event),
-                }
-            }
-        }
-        Ok(true) // Continue running
-    }
-
-    fn handle_key_event(&mut self, key_event: crossterm::event::KeyEvent) {
-        use crossterm::event::*;
-        let pressed = match key_event.kind {
-            crossterm::event::KeyEventKind::Press => true,
-            crossterm::event::KeyEventKind::Release => false,
-            _ => return,
-        };
-
-        // Map physical keys to CHIP-8 hex keypad
-        let chip8_key = match key_event.code {
-            KeyCode::Char('1') => Some(0x1),
-            KeyCode::Char('2') => Some(0x2),
-            KeyCode::Char('3') => Some(0x3),
-            KeyCode::Char('4') => Some(0xC),
-            KeyCode::Char('q') => Some(0x4),
-            KeyCode::Char('w') => Some(0x5),
-            KeyCode::Char('e') => Some(0x6),
-            KeyCode::Char('r') => Some(0xD),
-            KeyCode::Char('a') => Some(0x7),
-            KeyCode::Char('s') => Some(0x8),
-            KeyCode::Char('d') => Some(0x9),
-            KeyCode::Char('f') => Some(0xE),
-            KeyCode::Char('z') => Some(0xA),
-            KeyCode::Char('x') => Some(0x0),
-            KeyCode::Char('c') => Some(0xB),
-            KeyCode::Char('v') => Some(0xF),
-            _ => None,
-        };
-
-        if let Some(key_id) = chip8_key {
-            self.keys[key_id] = pressed;
-            println!(
-                "Key {:X}: {}",
-                key_id,
-                if pressed { "pressed" } else { "released" }
-            );
-        }
-    }
-
-    // Check if a specific CHIP-8 key is pressed
-    pub fn is_key_pressed(&self, key: u8) -> bool {
-        if key <= 0xF {
-            self.keys[key as usize]
-        } else {
-            false
-        }
-    }
-
-    // Get the first pressed key (for CHIP-8 wait-for-key instruction)
-    pub fn get_pressed_key(&self) -> Option<u8> {
-        for (i, &pressed) in self.keys.iter().enumerate() {
-            if pressed {
-                return Some(i as u8);
-            }
-        }
-        None
-    }
-}
+// Old InputHandler removed - using new input::KeyEventHandler instead
 
 #[derive(Debug, PartialEq)]
 enum Chip8Version {
@@ -469,10 +429,15 @@ enum Chip8Version {
     SUPERCHIP,
 }
 
+struct Chip8Config {
+    debug: bool,
+}
+
 struct Chip8 {
     version: Chip8Version,
+    config: Chip8Config,
     screen: Screen,
-    input: InputHandler,
+    input: input::KeyEventHandler,
     memory: [u8; Self::MEMORY_SIZE],
     pc_r: u16,                         // Program Counter
     index_r: u16,                      // Index Register
@@ -487,7 +452,6 @@ impl Chip8 {
     pub const MEMORY_SIZE: usize = 4096; // 4KB memory
     const ENTRY_POINT: u16 = 0x200; // Where a program is expected to start
     const CPU_FREQ_HZ: u16 = 500;
-    const TIMER_FREQ_HQ: u16 = 60;
     const INPUT_POLL_RATE: Duration = Duration::from_millis(50);
 
     // Default font loaded into memory before the application
@@ -512,11 +476,12 @@ impl Chip8 {
     ];
     const BYTES_PER_FONT: u16 = 5;
 
-    fn new(version: Chip8Version) -> Self {
+    fn new(version: Chip8Version, config: Chip8Config, input_handler: input::KeyEventHandler) -> Self {
         Self {
             version: version,
+            config,
             screen: Screen::new(),
-            input: InputHandler::new(),
+            input: input_handler,
             memory: [0; Self::MEMORY_SIZE],
             gen_r: [0; Self::REGISTER_COUNT],
             pc_r: Self::ENTRY_POINT,
@@ -697,8 +662,31 @@ impl Chip8 {
         self.screen.flush().unwrap();
     }
 
+    fn get_cpu_debug_info(&self) -> Option<String> {
+        if self.config.debug {
+            // Get current key state
+            let pressed_keys: Vec<u8> = (0u8..16).filter(|&k| self.input.is_key_pressed(k)).collect();
+            let pressed_key_str = if pressed_keys.is_empty() {
+                "None".to_string()
+            } else {
+                pressed_keys.iter().map(|k| format!("{:X}", k)).collect::<Vec<_>>().join(",")
+            };
+            
+            // Get registers in hex
+            let reg_str = (0..16).map(|i| format!("V{:X}={:02X}", i, self.gen_r[i]))
+                                 .collect::<Vec<_>>()
+                                 .join(" ");
+            
+            Some(format!("PC:{:04X} I:{:04X} Keys:[{}] Regs:[{}]", 
+                        self.pc_r, self.index_r, pressed_key_str, reg_str))
+        } else {
+            None
+        }
+    }
+
     fn execute(&mut self, inst: &Instruction) {
         use Instruction::*;
+
         match inst {
             ClearScreen => self.screen.clear(),
             Jump(addr) => {
@@ -707,7 +695,11 @@ impl Chip8 {
             }
             RegOp(reg_op, regx, regy) => self.execute_reg_op(reg_op, regx, regy),
             SetRegImmediate(reg, value) => *self.register_val_ref(reg) = value.0,
-            AddRegImmediate(reg, value) => *self.register_val_ref(reg) += value.0,
+            AddRegImmediate(reg, value) => {
+                let reg_val = self.register_val(reg);
+                let (new_val, _) = reg_val.overflowing_add(value.0);
+                self.register_set(reg, new_val);
+            }
             SetIndex(addr) => self.index_r = addr.0,
             AddIndex(reg) => {
                 // TODO: Might need to add overflow behaviour depnding on the game (See Amiga
@@ -796,9 +788,9 @@ impl Chip8 {
                 let random: u8 = rand::random();
                 self.register_set(reg, value.0 & random);
             }
-            SetSoundTimer(_reg) => todo!(),
-            SetDelayTimer(_reg) => todo!(),
-            GetDelayTimer(_reg) => todo!(),
+            SetSoundTimer(_reg) => { /* TODO */ }
+            SetDelayTimer(_reg) => { /* TODO */ }
+            GetDelayTimer(_reg) => { /* TODO */ }
             // Takes the decimal digits of the value in reg and stores them in memory starting with
             // index
             BinaryDecimalConv(reg) => {
@@ -819,6 +811,8 @@ impl Chip8 {
     fn cycle(&mut self) {
         crossterm::terminal::enable_raw_mode().unwrap();
         let cycle_time = Duration::from_nanos(1_000_000_000 / Self::CPU_FREQ_HZ as u64);
+        let mut debug_clear_timer = Instant::now();
+        
         loop {
             let cycle_start = Instant::now();
 
@@ -826,9 +820,32 @@ impl Chip8 {
                 break;
             };
 
+            // Update debug info from input handler
+            if let Some(debug_info) = self.input.get_debug_info() {
+                self.screen.set_debug_info(debug_info);
+                debug_clear_timer = Instant::now();
+            }
+
+            // Clear debug info after 2 seconds of no new input
+            if debug_clear_timer.elapsed() > Duration::from_secs(2) {
+                self.screen.clear_debug_info();
+                self.input.clear_last_key();
+            }
+
             let raw = self.fetch();
             let inst = self.decode(&raw);
+            
+            // Set CPU debug info if debug mode is enabled
+            if let Some(cpu_debug) = self.get_cpu_debug_info() {
+                self.screen.set_cpu_debug_info(cpu_debug);
+            }
+            
             self.execute(&inst);
+
+            // Flush screen to display debug info if in debug mode
+            if self.config.debug {
+                let _ = self.screen.flush();
+            }
 
             let elapsed = cycle_start.elapsed();
             if elapsed < cycle_time {
@@ -856,17 +873,54 @@ struct Args {
 
     #[arg(long, action = clap::ArgAction::SetTrue, help = "Dump the HEX instructions in the ROM")]
     dump_inst: bool,
+
+    #[arg(long, action = clap::ArgAction::SetTrue, help = "Enable debug mode showing CPU state each cycle")]
+    debug: bool,
+
+    #[arg(long, default_value = "qwerty", help = "Keyboard layout: qwerty, natural, or sequential")]
+    layout: String,
 }
 
 fn main() -> io::Result<()> {
     let args = Args::parse();
+    println!("Reading file {}", args.rom_file);
     let bytes = fs::read(args.rom_file).expect("Could not read file");
+    
     if args.dump_inst {
         Chip8::dump_inst(&bytes);
     } else {
-        let mut chip8 = Chip8::new(Chip8Version::COSMAC);
+        // Parse keyboard layout
+        let layout = match args.layout.to_lowercase().as_str() {
+            "qwerty" => input::KeyboardLayout::Qwerty,
+            "natural" => input::KeyboardLayout::Natural,
+            "sequential" => input::KeyboardLayout::Sequential,
+            _ => {
+                eprintln!("Invalid layout '{}'. Using qwerty.", args.layout);
+                input::KeyboardLayout::Qwerty
+            }
+        };
+        
+        // Create input configuration
+        let input_config = input::InputConfig {
+            layout,
+            enable_debug: args.debug,
+            ..Default::default()
+        };
+        
+        // Create input handler
+        let input_handler = input::KeyEventHandler::new(input_config);
+        
+        // Print layout info
+        if args.debug {
+            println!("Using keyboard layout:\n{}", input_handler.get_layout_description());
+        }
+        
+        // Create emulator
+        let config = Chip8Config { debug: args.debug };
+        let mut chip8 = Chip8::new(Chip8Version::COSMAC, config, input_handler);
         chip8.load_rom(&bytes);
         chip8.cycle();
     }
+    
     Ok(())
 }
