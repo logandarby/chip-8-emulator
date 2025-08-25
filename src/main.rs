@@ -839,6 +839,12 @@ impl Chip8 {
     }
 }
 
+impl Drop for Chip8 {
+    fn drop(&mut self) {
+        crossterm::terminal::disable_raw_mode().unwrap();
+    }
+}
+
 use clap::Parser;
 
 #[derive(Parser)]
