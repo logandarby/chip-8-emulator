@@ -1,5 +1,11 @@
 use core::fmt;
-use std::{fs, io::{self, Write}, thread, time::Duration};
+use crossterm::{self, execute};
+use std::{
+    fs,
+    io::{self, Write},
+    thread,
+    time::Duration,
+};
 
 #[derive(Debug)]
 struct Register(u8);
@@ -101,23 +107,20 @@ impl Instruction {
 
 struct Screen {
     pixels: [bool; Self::N_PIXELS as usize],
-    // Private buffer to collect output before printing
-    buffer: String,
 }
 
 impl Screen {
-
     pub const N_ROWS: u8 = 32;
     pub const N_COLS: u8 = 64;
     pub const N_PIXELS: u16 = Self::N_ROWS as u16 * Self::N_COLS as u16;
     // Hide cursor, clear screen, and move to top-left
-    const ANSI_ESCAPE: &str = "\x1B[?25l\x1B[2J\x1B[H";
-    const BUFFER_SIZE: usize = Self::ANSI_ESCAPE.len() + (Self::N_COLS as usize * 2 + 2) * Self::N_ROWS as usize;
 
     fn new() -> Self {
+        use crossterm::cursor::*;
+        use crossterm::terminal::*;
+        execute!(std::io::stdout(), EnterAlternateScreen, Hide).expect("Could not create terminal");
         Self {
             pixels: [false; Self::N_PIXELS as usize],
-            buffer: String::with_capacity(Self::BUFFER_SIZE),
         }
     }
 
@@ -128,39 +131,67 @@ impl Screen {
     }
 
     fn get_pixel(&self, x: u8, y: u8) -> Option<bool> {
-        if x >= Self::N_COLS.into() || y >= Self::N_ROWS.into() {return None;}
+        if x >= Self::N_COLS.into() || y >= Self::N_ROWS.into() {
+            return None;
+        }
         return Some(self.pixels[Self::get_idx(x, y)]);
     }
 
     fn set_pixel(&mut self, x: u8, y: u8, value: bool) {
-        if x >= Self::N_COLS.into() || y >= Self::N_ROWS.into() { return; }
+        if x >= Self::N_COLS.into() || y >= Self::N_ROWS.into() {
+            return;
+        }
         self.pixels[Self::get_idx(x, y)] = value;
     }
 
     fn clear(&mut self) {
         self.pixels.fill(false);
-        print!("{}", Self::ANSI_ESCAPE);
-        io::stdout().flush().unwrap();
+        self.flush();
     }
-  
+
     // Draws to the console
-    fn flush(&mut self) {
-        self.buffer.clear();
-        self.buffer.push_str(Self::ANSI_ESCAPE);
-        for y in 0..Self::N_ROWS {
-            for x in 0..Self::N_COLS {
+    fn flush(&mut self) -> Option<()> {
+        use crossterm::{cursor::*, queue, style::*, terminal::*};
+        use std::io::stdout;
+        let (term_width, term_height) = crossterm::terminal::size().ok()?;
+
+        // Calculate centering offset
+        let display_width = (Screen::N_COLS * 2) as u16;
+        let display_height = Screen::N_ROWS as u16;
+        let offset_x = (term_width.saturating_sub(display_width)) / 2;
+        let offset_y = (term_height.saturating_sub(display_height)) / 2;
+
+        // Clear screen
+        queue!(stdout(), Clear(ClearType::All)).ok()?;
+
+        // Draw display centered
+        for y in 0..Screen::N_ROWS {
+            queue!(stdout(), MoveTo(offset_x, offset_y + y as u16)).ok()?;
+            for x in 0..Screen::N_COLS {
                 let pixel = self.get_pixel(x, y).unwrap();
-                self.buffer.push_str(if pixel { "██" } else { "  " });
+                if pixel {
+                    queue!(stdout(), SetBackgroundColor(Color::Green), Print("  ")).ok()?;
+                } else {
+                    queue!(stdout(), SetBackgroundColor(Color::Black), Print("  ")).ok()?;
+                }
             }
-            if y < Self::N_ROWS - 1 {
-                self.buffer.push('\n');
-            }
+            queue!(stdout(), ResetColor).ok()?;
         }
-        print!("{}", self.buffer);
-        io::stdout().flush().unwrap();
+
+        // Add title
+        queue!(
+            stdout(),
+            MoveTo(offset_x, offset_y.saturating_sub(2)),
+            Print("CHIP-8 Emulator"),
+            MoveTo(offset_x, offset_y + display_height + 1),
+            Print("Press 'q' to quit")
+        )
+        .ok()?;
+
+        stdout().flush().ok()?;
+        Some(())
     }
 }
-
 
 struct Chip8 {
     screen: Screen,
@@ -176,8 +207,8 @@ struct Chip8 {
 impl Chip8 {
     pub const REGISTER_COUNT: usize = 16; // 16 General Purpose Registers
     pub const MEMORY_SIZE: usize = 4096; // 4KB memory
-    const ENTRY_POINT: u16 = 0x200;      // Where a program is expected to start
-   
+    const ENTRY_POINT: u16 = 0x200; // Where a program is expected to start
+
     // Default font loaded into memory before the application
     const FONT_START_ADDR: u16 = 0x50;
     const FONT: [u8; 80] = [
@@ -196,7 +227,7 @@ impl Chip8 {
         0xF0, 0x80, 0x80, 0x80, 0xF0, // C
         0xE0, 0x90, 0x90, 0x90, 0xE0, // D
         0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
-        0xF0, 0x80, 0xF0, 0x80, 0x80  // F
+        0xF0, 0x80, 0xF0, 0x80, 0x80, // F
     ];
 
     fn new() -> Self {
@@ -211,11 +242,11 @@ impl Chip8 {
 
     fn load_rom(&mut self, bytes: &Vec<u8>) {
         // TODO: Do better loading here, with better error handling
-        // Load Fonts into memory 
+        // Load Fonts into memory
         let font_start: usize = Self::FONT_START_ADDR as usize;
         let font_end: usize = font_start + Self::FONT.len();
         self.memory[font_start..font_end].copy_from_slice(&Self::FONT);
-        
+
         // Load ROM into memory
         let start: usize = Self::ENTRY_POINT as usize;
         let end: usize = Self::ENTRY_POINT as usize + bytes.len();
@@ -259,7 +290,10 @@ impl Chip8 {
         use Instruction::*;
         match inst {
             ClearScreen => self.screen.clear(),
-            Jump(addr) => { self.pc_r = addr.0; return; },
+            Jump(addr) => {
+                self.pc_r = addr.0;
+                return;
+            }
             SetReg(reg, value) => *self.register_val(reg) = value.0,
             AddReg(reg, value) => *self.register_val(reg) += value.0,
             SetIndex(addr) => self.index_r = addr.0,
@@ -274,21 +308,21 @@ impl Chip8 {
                 let start_y = *self.register_val(regy) % Screen::N_ROWS;
                 *self.vf() = 0;
                 let index_addr = self.index_r;
-                
+
                 for row in 0..row_count.0 {
                     let y = start_y + row;
                     if y >= Screen::N_ROWS {
                         break;
                     }
-                    
+
                     let sprite_data = self.load_from_addr(index_addr + row as u16);
-                    
+
                     for bit_pos in 0..8 {
                         let x = start_x + bit_pos;
                         if x >= Screen::N_COLS {
                             break;
                         }
-                        
+
                         let sprite_bit = (sprite_data >> (7 - bit_pos)) & 1;
                         if sprite_bit == 1 {
                             let pixel = self.screen.get_pixel(x, y).unwrap();
