@@ -1,20 +1,39 @@
 use core::fmt;
 use crossterm::{self, cursor::Show, execute, terminal::LeaveAlternateScreen};
 use std::{
+    fmt::{Debug, Display},
     fs,
     io::{self, Write},
     thread,
     time::{Duration, Instant},
 };
 
-#[derive(Debug)]
 struct Register(u8);
-#[derive(Debug)]
+impl Display for Register {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "V{:X}", self.0)
+    }
+}
 struct Address(u16);
-#[derive(Debug)]
+impl Display for Address {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Ax{:06X}", self.0)
+    }
+}
+
 struct Immediate8(u8);
-#[derive(Debug)]
+impl Display for Immediate8 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#04X}", self.0)
+    }
+}
 struct Immediate4(u8);
+impl Display for Immediate4 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#02X}", self.0)
+    }
+}
+
 #[derive(Clone)]
 struct RawInstruction(u16);
 
@@ -72,7 +91,6 @@ impl fmt::Display for RawInstruction {
     }
 }
 
-#[derive(Debug)]
 enum RegOperation {
     Set,
     OR,
@@ -85,13 +103,35 @@ enum RegOperation {
     ShiftRight,
 }
 
-#[derive(Debug, PartialEq)]
+impl Display for RegOperation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use RegOperation::*;
+        let op = match self {
+            Set => "=",
+            OR => "|",
+            AND => "&",
+            XOR => "^",
+            Add => "+",
+            SubInv | Sub => "-",
+            ShiftLeft => "<<",
+            ShiftRight => ">>",
+        };
+        write!(f, "{op}")
+    }
+}
+
+#[derive(PartialEq)]
 enum SkipIf {
     Eq,
     NotEq,
 }
 
-#[derive(Debug)]
+impl Display for SkipIf {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", if *self == SkipIf::Eq { "==" } else { "!=" })
+    }
+}
+
 enum Instruction {
     // Draw
     ClearScreen,
@@ -125,6 +165,54 @@ enum Instruction {
     AddIndex(Register),
     // Misc
     BinaryDecimalConv(Register),
+    // Debugging and NoOp
+    // This cannot be implemented in an interpreter, and so it is a No
+    ExecuteMachineLangRoutine,
+    Invalid,
+}
+
+impl Display for Instruction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use Instruction::*;
+        match self {
+            ClearScreen => write!(f, "ClearScreen"),
+            Draw(regx, regy, value) => write!(f, "Draw {regx} {regy} {value}"),
+            SetFont(regx) => write!(f, "SetFont {regx}"),
+            Jump(addr) => write!(f, "Jump to {addr}"),
+            JumpWithOffset(addr) => write!(f, "Jump With Offset {addr}"),
+            CallSubroutine(addr) => write!(f, "Call {addr}"),
+            Return => write!(f, "Return"),
+            Skip(skipif, regx, value) => write!(f, "Skip if {regx} {skipif} {value}"),
+            SkipReg(skipif, regx, regy) => write!(f, "Skip if {regx} {skipif} {regy}"),
+            SkipKeyPress(skipif, regx) => write!(f, "Skip if key {skipif} {regx}"),
+            GetKey(regx) => write!(f, "Key into {regx}"),
+            RegOp(regop, regx, regy) => {
+                use RegOperation::*;
+                match regop {
+                   Set => write!(f, "{regx} {regop} {regy}"),
+                    // Equal
+                    AND | OR | XOR | Add | Sub => write!(f, "{regx} = {regx} {regop} {regy}"),
+                    SubInv => write!(f, "{regx} = {regy} {regop} {regx}"),
+                    // Implementation Dependent
+                    ShiftLeft => write!(f, "Shift Left on {regx} {regy}"),
+                    ShiftRight => write!(f, "Shift Right on {regx} {regy}"),
+                }
+            },
+            SetRegImmediate(regx, value) => write!(f, "{regx} = {value}"),
+            AddRegImmediate(regx, value) => write!(f, "{regx} = {regx} + {value}"),
+            Random(regx, value) => write!(f, "{regx} = RANDOM & {value}"),
+            StoreAddr(regx) => write!(f, "Store {}-{regx}", Register(0)),
+            LoadAddr(regx) => write!(f, "Load {}-{regx}", Register(0)),
+            SetSoundTimer(regx) => write!(f, "Set Sound {regx}"),
+            SetDelayTimer(regx) => write!(f, "Set Delay {regx}"),
+            GetDelayTimer(regx) => write!(f, "Get Delay {regx}"),
+            SetIndex(addr) => write!(f, "Set Index {addr}"),
+            AddIndex(regx) => write!(f, "Add Index {regx}"),
+            BinaryDecimalConv(regx) => write!(f, "BinaryDecimalConv {regx}"),
+            ExecuteMachineLangRoutine => write!(f, "ExecMachineLangRoutine"),
+            Invalid => write!(f, "INVALID"),
+        }
+    }
 }
 
 impl Instruction {
@@ -133,13 +221,14 @@ impl Instruction {
         Some(match (nibble1, nibble2, nibble3, nibble4) {
             // Display/Draw
             (0, 0, 0xE, 0) => Instruction::ClearScreen,
+            (0x0, 0x0, 0xE, 0xE) => Instruction::Return,
+            (0, _, _, _) => Instruction::ExecuteMachineLangRoutine,
             (0xD, _, _, _) => Instruction::Draw(raw.x(), raw.y(), raw.n()),
             (0xF, _, 0x2, 0x9) => Instruction::SetFont(raw.x()),
 
             // Subroutine
             (0x1, _, _, _) => Instruction::Jump(raw.nnn()),
             (0xB, _, _, _) => Instruction::JumpWithOffset(raw.nnn()),
-            (0x0, 0x0, 0xE, 0xE) => Instruction::Return,
             (0x2, _, _, _) => Instruction::CallSubroutine(raw.nnn()),
 
             // Control Flow
@@ -234,7 +323,7 @@ impl Screen {
 
     fn clear(&mut self) {
         self.pixels.fill(false);
-        self.flush().unwrap();
+        // self.flush().unwrap();
     }
 
     // Draws to the console
@@ -272,7 +361,7 @@ impl Screen {
             MoveTo(offset_x, offset_y.saturating_sub(2)),
             Print("CHIP-8 Emulator"),
             MoveTo(offset_x, offset_y + display_height + 1),
-            Print("Press 'q' to quit")
+            Print("Press 'Escape' to quit")
         )?;
 
         stdout().flush()?;
@@ -298,27 +387,25 @@ pub struct InputHandler {
 
 impl InputHandler {
     pub fn new() -> Self {
-        Self {
-            keys: [false; 16],
-        }
+        Self { keys: [false; 16] }
     }
-    
+
     // Non-blocking input polling
     pub fn update(&mut self) -> Result<bool, Box<dyn std::error::Error>> {
-        use crossterm::event::*;
         use crossterm::event;
+        use crossterm::event::*;
         // Poll for events with timeout
         while event::poll(Duration::from_millis(0))? {
             if let Event::Key(key_event) = event::read()? {
                 match key_event.code {
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(false), // Quit
+                    KeyCode::Esc => return Ok(false), // Quit
                     _ => self.handle_key_event(key_event),
                 }
             }
         }
         Ok(true) // Continue running
     }
-    
+
     fn handle_key_event(&mut self, key_event: crossterm::event::KeyEvent) {
         use crossterm::event::*;
         let pressed = match key_event.kind {
@@ -326,7 +413,7 @@ impl InputHandler {
             crossterm::event::KeyEventKind::Release => false,
             _ => return,
         };
-        
+
         // Map physical keys to CHIP-8 hex keypad
         let chip8_key = match key_event.code {
             KeyCode::Char('1') => Some(0x1),
@@ -347,13 +434,17 @@ impl InputHandler {
             KeyCode::Char('v') => Some(0xF),
             _ => None,
         };
-        
+
         if let Some(key_id) = chip8_key {
             self.keys[key_id] = pressed;
-            println!("Key {:X}: {}", key_id, if pressed { "pressed" } else { "released" });
+            println!(
+                "Key {:X}: {}",
+                key_id,
+                if pressed { "pressed" } else { "released" }
+            );
         }
     }
-    
+
     // Check if a specific CHIP-8 key is pressed
     pub fn is_key_pressed(&self, key: u8) -> bool {
         if key <= 0xF {
@@ -362,7 +453,7 @@ impl InputHandler {
             false
         }
     }
-    
+
     // Get the first pressed key (for CHIP-8 wait-for-key instruction)
     pub fn get_pressed_key(&self) -> Option<u8> {
         for (i, &pressed) in self.keys.iter().enumerate() {
@@ -448,6 +539,25 @@ impl Chip8 {
         let start: usize = Self::ENTRY_POINT as usize;
         let end: usize = Self::ENTRY_POINT as usize + bytes.len();
         self.memory[start..end].copy_from_slice(bytes);
+    }
+
+    // Dumps the instructions contained in the bytes
+    fn dump_inst(bytes: &Vec<u8>) {
+        println!("Dumping instruction hex codes:");
+        bytes
+            .chunks_exact(2)
+            .map(|chunk| RawInstruction::new(chunk[0], chunk[1]))
+            .enumerate()
+            .for_each(|(index, raw)| {
+                let inst = Instruction::decode(&raw);
+                let addr = Address(Self::ENTRY_POINT + index as u16 * 2);
+                println!(
+                    "{}: Code {}, {}",
+                    addr,
+                    raw,
+                    inst.unwrap_or(Instruction::Invalid)
+                );
+            });
     }
 
     fn vf(&mut self) -> &mut u8 {
@@ -638,12 +748,12 @@ impl Chip8 {
                 let addr_to_jump = if self.version == Chip8Version::COSMAC {
                     addr.0 + self.register_val(&Register(0)) as u16
                 } else {
-                    // Strange quirk in newer interpreters where the addr was interpreted as XNN 
+                    // Strange quirk in newer interpreters where the addr was interpreted as XNN
                     addr.0 + self.register_val(&Register(((addr.0 >> 8) & 0xF) as u8)) as u16
                 };
                 self.pc_r = addr_to_jump;
                 return;
-            },
+            }
             CallSubroutine(addr) => {
                 self.stack.push(self.pc_r);
                 self.pc_r = addr.0;
@@ -671,8 +781,7 @@ impl Chip8 {
                 if (*skipif == SkipIf::Eq && pressed) || (*skipif == SkipIf::NotEq && !pressed) {
                     self.increment_pc();
                 }
-
-            },
+            }
             // Block exec and get next key press
             GetKey(reg) => {
                 // TODO: On COSMAC, should only be registered when pressed THEN released
@@ -703,7 +812,9 @@ impl Chip8 {
                 self.store_in_addr(self.index_r, first_digit);
                 self.store_in_addr(self.index_r + 1, second_digit);
                 self.store_in_addr(self.index_r + 2, last_digit);
-            },
+            }
+            Invalid => panic!("Invalid instruction encountered"),
+            ExecuteMachineLangRoutine => {}
         };
         self.increment_pc();
     }
@@ -731,11 +842,28 @@ impl Chip8 {
     }
 }
 
+use clap::Parser;
+
+#[derive(Parser)]
+#[command(name = "chip8-emulator")]
+#[command(about = "A CHIP-8 emulator written in Rust")]
+struct Args {
+    #[arg(help = "Path to the CHIP-8 ROM file")]
+    rom_file: String,
+
+    #[arg(long, action = clap::ArgAction::SetTrue, help = "Dump the HEX instructions in the ROM")]
+    dump_inst: bool,
+}
+
 fn main() -> io::Result<()> {
-    let filename = "roms/Pong (alt).ch8";
-    let bytes = fs::read(filename).expect(format!("Could not read file {}", filename).as_str());
-    let mut chip8 = Chip8::new(Chip8Version::COSMAC);
-    chip8.load_rom(&bytes);
-    chip8.cycle();
+    let args = Args::parse();
+    let bytes = fs::read(args.rom_file).expect("Could not read file");
+    if args.dump_inst {
+        Chip8::dump_inst(&bytes);
+    } else {
+        let mut chip8 = Chip8::new(Chip8Version::COSMAC);
+        chip8.load_rom(&bytes);
+        chip8.cycle();
+    }
     Ok(())
 }
