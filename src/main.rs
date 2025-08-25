@@ -4,7 +4,7 @@ use std::{
     fs,
     io::{self, Write},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[derive(Debug)]
@@ -234,14 +234,14 @@ impl Screen {
 
     fn clear(&mut self) {
         self.pixels.fill(false);
-        self.flush();
+        self.flush().unwrap();
     }
 
     // Draws to the console
-    fn flush(&mut self) -> Option<()> {
+    fn flush(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         use crossterm::{cursor::*, queue, style::*, terminal::*};
         use std::io::stdout;
-        let (term_width, term_height) = crossterm::terminal::size().ok()?;
+        let (term_width, term_height) = crossterm::terminal::size()?;
 
         // Calculate centering offset
         let display_width = (Screen::N_COLS * 2) as u16;
@@ -250,20 +250,20 @@ impl Screen {
         let offset_y = (term_height.saturating_sub(display_height)) / 2;
 
         // Clear screen
-        queue!(stdout(), Clear(ClearType::All)).ok()?;
+        queue!(stdout(), Clear(ClearType::All))?;
 
         // Draw display centered
         for y in 0..Screen::N_ROWS {
-            queue!(stdout(), MoveTo(offset_x, offset_y + y as u16)).ok()?;
+            queue!(stdout(), MoveTo(offset_x, offset_y + y as u16))?;
             for x in 0..Screen::N_COLS {
                 let pixel = self.get_pixel(x, y).unwrap();
                 if pixel {
-                    queue!(stdout(), SetBackgroundColor(Color::Green), Print("  ")).ok()?;
+                    queue!(stdout(), SetBackgroundColor(Color::Green), Print("  "))?;
                 } else {
-                    queue!(stdout(), SetBackgroundColor(Color::Black), Print("  ")).ok()?;
+                    queue!(stdout(), SetBackgroundColor(Color::Black), Print("  "))?;
                 }
             }
-            queue!(stdout(), ResetColor).ok()?;
+            queue!(stdout(), ResetColor)?;
         }
 
         // Add title
@@ -273,11 +273,10 @@ impl Screen {
             Print("CHIP-8 Emulator"),
             MoveTo(offset_x, offset_y + display_height + 1),
             Print("Press 'q' to quit")
-        )
-        .ok()?;
+        )?;
 
-        stdout().flush().ok()?;
-        Some(())
+        stdout().flush()?;
+        Ok(())
     }
 }
 
@@ -293,8 +292,99 @@ impl Drop for Screen {
     }
 }
 
+pub struct InputHandler {
+    keys: [bool; 16], // CHIP-8 has 16 keys (0-F)
+}
+
+impl InputHandler {
+    pub fn new() -> Self {
+        Self {
+            keys: [false; 16],
+        }
+    }
+    
+    // Non-blocking input polling
+    pub fn update(&mut self) -> Result<bool, Box<dyn std::error::Error>> {
+        use crossterm::event::*;
+        use crossterm::event;
+        // Poll for events with timeout
+        while event::poll(Duration::from_millis(0))? {
+            if let Event::Key(key_event) = event::read()? {
+                match key_event.code {
+                    KeyCode::Char('q') | KeyCode::Esc => return Ok(false), // Quit
+                    _ => self.handle_key_event(key_event),
+                }
+            }
+        }
+        Ok(true) // Continue running
+    }
+    
+    fn handle_key_event(&mut self, key_event: crossterm::event::KeyEvent) {
+        use crossterm::event::*;
+        let pressed = match key_event.kind {
+            crossterm::event::KeyEventKind::Press => true,
+            crossterm::event::KeyEventKind::Release => false,
+            _ => return,
+        };
+        
+        // Map physical keys to CHIP-8 hex keypad
+        let chip8_key = match key_event.code {
+            KeyCode::Char('1') => Some(0x1),
+            KeyCode::Char('2') => Some(0x2),
+            KeyCode::Char('3') => Some(0x3),
+            KeyCode::Char('4') => Some(0xC),
+            KeyCode::Char('q') => Some(0x4),
+            KeyCode::Char('w') => Some(0x5),
+            KeyCode::Char('e') => Some(0x6),
+            KeyCode::Char('r') => Some(0xD),
+            KeyCode::Char('a') => Some(0x7),
+            KeyCode::Char('s') => Some(0x8),
+            KeyCode::Char('d') => Some(0x9),
+            KeyCode::Char('f') => Some(0xE),
+            KeyCode::Char('z') => Some(0xA),
+            KeyCode::Char('x') => Some(0x0),
+            KeyCode::Char('c') => Some(0xB),
+            KeyCode::Char('v') => Some(0xF),
+            _ => None,
+        };
+        
+        if let Some(key_id) = chip8_key {
+            self.keys[key_id] = pressed;
+            println!("Key {:X}: {}", key_id, if pressed { "pressed" } else { "released" });
+        }
+    }
+    
+    // Check if a specific CHIP-8 key is pressed
+    pub fn is_key_pressed(&self, key: u8) -> bool {
+        if key <= 0xF {
+            self.keys[key as usize]
+        } else {
+            false
+        }
+    }
+    
+    // Get the first pressed key (for CHIP-8 wait-for-key instruction)
+    pub fn get_pressed_key(&self) -> Option<u8> {
+        for (i, &pressed) in self.keys.iter().enumerate() {
+            if pressed {
+                return Some(i as u8);
+            }
+        }
+        None
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum Chip8Version {
+    COSMAC,
+    CHIP48,
+    SUPERCHIP,
+}
+
 struct Chip8 {
+    version: Chip8Version,
     screen: Screen,
+    input: InputHandler,
     memory: [u8; Self::MEMORY_SIZE],
     pc_r: u16,                         // Program Counter
     index_r: u16,                      // Index Register
@@ -308,6 +398,9 @@ impl Chip8 {
     pub const REGISTER_COUNT: usize = 16; // 16 General Purpose Registers
     pub const MEMORY_SIZE: usize = 4096; // 4KB memory
     const ENTRY_POINT: u16 = 0x200; // Where a program is expected to start
+    const CPU_FREQ_HZ: u16 = 1000;
+    const TIMER_FREQ_HQ: u16 = 60;
+    const INPUT_POLL_RATE: Duration = Duration::from_millis(50);
 
     // Default font loaded into memory before the application
     const FONT_START_ADDR: u16 = 0x50;
@@ -331,9 +424,11 @@ impl Chip8 {
     ];
     const BYTES_PER_FONT: u16 = 5;
 
-    fn new() -> Self {
+    fn new(version: Chip8Version) -> Self {
         Self {
+            version: version,
             screen: Screen::new(),
+            input: InputHandler::new(),
             memory: [0; Self::MEMORY_SIZE],
             gen_r: [0; Self::REGISTER_COUNT],
             pc_r: Self::ENTRY_POINT,
@@ -375,6 +470,10 @@ impl Chip8 {
         return self.memory[addr as usize];
     }
 
+    fn store_in_addr(&mut self, addr: u16, value: u8) {
+        self.memory[addr as usize] = value;
+    }
+
     fn increment_pc(&mut self) {
         self.pc_r += 2;
     }
@@ -396,14 +495,9 @@ impl Chip8 {
         );
     }
 
-    fn execute_font_char(&mut self, reg: &Register) {
-        self.index_r = Self::FONT_START_ADDR + (reg.0 as u16 * Self::BYTES_PER_FONT); 
-    }
-
     fn execute_reg_op(&mut self, reg_op: &RegOperation, regx: &Register, regy: &Register) {
         let vx = self.register_val(regx);
         let vy = self.register_val(regy);
-        // TODO: Carry flag
         match *reg_op {
             RegOperation::Set => {
                 self.register_set(regx, vy);
@@ -433,10 +527,24 @@ impl Chip8 {
                 *self.vf() = if vy > vx { 1 } else { 0 };
             }
             RegOperation::ShiftLeft => {
-                todo!()
+                let val = if self.version == Chip8Version::COSMAC {
+                    self.register_set(regx, vy);
+                    vy
+                } else {
+                    vx
+                };
+                *self.vf() = (val & 0x80) >> 7;
+                self.register_set(regx, val << 1);
             }
             RegOperation::ShiftRight => {
-                todo!()
+                let val = if self.version == Chip8Version::COSMAC {
+                    self.register_set(regx, vy);
+                    vy
+                } else {
+                    vx
+                };
+                *self.vf() = val & 1;
+                self.register_set(regx, val >> 1);
             }
         }
     }
@@ -479,7 +587,7 @@ impl Chip8 {
                 }
             }
         }
-        self.screen.flush();
+        self.screen.flush().unwrap();
     }
 
     fn execute(&mut self, inst: &Instruction) {
@@ -494,65 +602,139 @@ impl Chip8 {
             SetRegImmediate(reg, value) => *self.register_val_ref(reg) = value.0,
             AddRegImmediate(reg, value) => *self.register_val_ref(reg) += value.0,
             SetIndex(addr) => self.index_r = addr.0,
-            AddIndex(_reg) => todo!(),
+            AddIndex(reg) => {
+                // TODO: Might need to add overflow behaviour depnding on the game (See Amiga
+                // Spaceflight 2091)
+                self.index_r += self.register_val(reg) as u16;
+            }
             Draw(regx, regy, row_count) => {
                 self.execute_draw(regx, regy, row_count);
+            }
+            LoadAddr(reg) => {
+                // Takes the value starting from addr I, and loads it into registers from v0 to
+                // vreg
+                for i in 0x0..(reg.0 + 1) {
+                    let value = self.load_from_addr(self.index_r + i as u16);
+                    self.register_set(&Register(i), value);
+                }
+                if self.version == Chip8Version::COSMAC {
+                    self.index_r += reg.0 as u16 + 1;
+                }
+            }
+            StoreAddr(reg) => {
+                for i in 0x0..(reg.0 + 1) {
+                    let value = self.register_val(&Register(i));
+                    self.store_in_addr(self.index_r + i as u16, value);
+                }
+                if self.version == Chip8Version::COSMAC {
+                    self.index_r += reg.0 as u16 + 1;
+                }
+            }
+            SetFont(reg) => {
+                self.index_r =
+                    Self::FONT_START_ADDR + ((reg.0 & 0x0F) as u16 * Self::BYTES_PER_FONT);
+            }
+            JumpWithOffset(addr) => {
+                let addr_to_jump = if self.version == Chip8Version::COSMAC {
+                    addr.0 + self.register_val(&Register(0)) as u16
+                } else {
+                    // Strange quirk in newer interpreters where the addr was interpreted as XNN 
+                    addr.0 + self.register_val(&Register(((addr.0 >> 8) & 0xF) as u8)) as u16
+                };
+                self.pc_r = addr_to_jump;
+                return;
             },
-            LoadAddr(_reg) => { todo!() }
-            StoreAddr(_reg) => { todo!() }
-            SetFont(reg) => self.execute_font_char(reg),
-            JumpWithOffset(_addr) => todo!(),
             CallSubroutine(addr) => {
                 self.stack.push(self.pc_r);
                 self.pc_r = addr.0;
                 return;
-            },
+            }
             Return => {
                 let return_addr = self.stack.pop().expect("CRITICAL: Stack is empty");
                 self.pc_r = return_addr;
                 return;
-            },
+            }
             Skip(skipif, reg, value) => {
                 let eq = self.register_val(reg) == value.0.into();
                 if *skipif == SkipIf::Eq && eq || *skipif == SkipIf::NotEq && !eq {
                     self.increment_pc();
                 }
-            },
+            }
             SkipReg(skipif, regx, regy) => {
                 let eq = self.register_val(regx) == self.register_val(regy);
-                if *skipif == SkipIf::Eq && eq || *skipif == SkipIf::NotEq && !eq {
+                if (*skipif == SkipIf::Eq && eq) || (*skipif == SkipIf::NotEq && !eq) {
                     self.increment_pc();
                 }
+            }
+            SkipKeyPress(skipif, reg) => {
+                let pressed = self.input.is_key_pressed(self.register_val(reg));
+                if (*skipif == SkipIf::Eq && pressed) || (*skipif == SkipIf::NotEq && !pressed) {
+                    self.increment_pc();
+                }
+
             },
-            SkipKeyPress(_skipif, _reg) => todo!(),
-            GetKey(_reg) => todo!(),
+            // Block exec and get next key press
+            GetKey(reg) => {
+                // TODO: On COSMAC, should only be registered when pressed THEN released
+                loop {
+                    self.input.update().unwrap();
+                    let key = self.input.get_pressed_key();
+                    if let Some(key) = key {
+                        self.register_set(reg, key);
+                        break;
+                    };
+                    thread::sleep(Self::INPUT_POLL_RATE);
+                }
+            }
             Random(reg, value) => {
                 let random: u8 = rand::random();
                 self.register_set(reg, value.0 & random);
-            },
+            }
             SetSoundTimer(_reg) => todo!(),
             SetDelayTimer(_reg) => todo!(),
             GetDelayTimer(_reg) => todo!(),
-            BinaryDecimalConv(_reg) => todo!(),
+            // Takes the decimal digits of the value in reg and stores them in memory starting with
+            // index
+            BinaryDecimalConv(reg) => {
+                let value = self.register_val(reg);
+                let first_digit = value / 100;
+                let second_digit = (value % 100) / 10;
+                let last_digit = value % 10;
+                self.store_in_addr(self.index_r, first_digit);
+                self.store_in_addr(self.index_r + 1, second_digit);
+                self.store_in_addr(self.index_r + 2, last_digit);
+            },
         };
         self.increment_pc();
     }
 
     fn cycle(&mut self) {
+        crossterm::terminal::enable_raw_mode().unwrap();
+        let cycle_time = Duration::from_nanos(1_000_000_000 / Self::CPU_FREQ_HZ as u64);
         loop {
+            let cycle_start = Instant::now();
+
+            if !self.input.update().unwrap_or(false) {
+                break;
+            };
+
             let raw = self.fetch();
             let inst = self.decode(&raw);
             self.execute(&inst);
-            // println!("Executing instruction {raw} as {:#?}", inst);
-            thread::sleep(Duration::from_millis(102));
+
+            let elapsed = cycle_start.elapsed();
+            if elapsed < cycle_time {
+                thread::sleep(cycle_time - elapsed);
+            }
         }
+        crossterm::terminal::disable_raw_mode().unwrap();
     }
 }
 
 fn main() -> io::Result<()> {
-    let filename = "roms/IBM Logo.ch8";
+    let filename = "roms/Pong (alt).ch8";
     let bytes = fs::read(filename).expect(format!("Could not read file {}", filename).as_str());
-    let mut chip8 = Chip8::new();
+    let mut chip8 = Chip8::new(Chip8Version::COSMAC);
     chip8.load_rom(&bytes);
     chip8.cycle();
     Ok(())
