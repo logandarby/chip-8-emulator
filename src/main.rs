@@ -288,6 +288,7 @@ struct Screen {
     pixels: [bool; Self::N_PIXELS as usize],
     debug_info: String,
     cpu_debug_info: String,
+    current_instruction_debug: String,
 }
 
 impl Screen {
@@ -304,6 +305,7 @@ impl Screen {
             pixels: [false; Self::N_PIXELS as usize],
             debug_info: String::new(),
             cpu_debug_info: String::new(),
+            current_instruction_debug: String::new(),
         }
     }
 
@@ -344,6 +346,9 @@ impl Screen {
         self.cpu_debug_info = info;
     }
 
+    fn set_current_instruction_debug(&mut self, info: String) {
+        self.current_instruction_debug = info;
+    }
 
     // Draws to the console
     fn flush(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -355,7 +360,23 @@ impl Screen {
         let display_width = (Screen::N_COLS * 2) as u16;
         let display_height = Screen::N_ROWS as u16;
         let offset_x = (term_width.saturating_sub(display_width)) / 2;
-        let offset_y = (term_height.saturating_sub(display_height)) / 2;
+
+        // Reserve space at bottom for debug info (title + escape text + up to 3 debug lines)
+        let bottom_reserve = if !self.debug_info.is_empty()
+            || !self.cpu_debug_info.is_empty()
+            || !self.current_instruction_debug.is_empty()
+        {
+            7 // Title + escape + up to 3 debug lines + some padding
+        } else {
+            4 // Just title + escape + padding
+        };
+
+        let available_height = term_height.saturating_sub(bottom_reserve);
+        let offset_y = if available_height < display_height {
+            1 // If terminal is too small, start near top
+        } else {
+            available_height.saturating_sub(display_height) / 2
+        };
 
         // Draw display centered
         for y in 0..Screen::N_ROWS {
@@ -380,25 +401,39 @@ impl Screen {
             Print("Press 'Escape' to quit")
         )?;
 
-        // Add debug info at the bottom if available
-        let mut debug_line = offset_y + display_height + 3;
+        // Add debug info right after the "Press Escape" text
+        let mut debug_line = offset_y + display_height + 2;
         if !self.debug_info.is_empty() {
             queue!(
                 stdout(),
                 MoveTo(offset_x, debug_line),
                 SetForegroundColor(Color::Yellow),
                 Print(format!("INPUT: {}", self.debug_info)),
+                crossterm::terminal::Clear(crossterm::terminal::ClearType::UntilNewLine),
                 ResetColor
             )?;
             debug_line += 1;
         }
-        
+
         if !self.cpu_debug_info.is_empty() {
             queue!(
                 stdout(),
                 MoveTo(offset_x, debug_line),
                 SetForegroundColor(Color::Cyan),
                 Print(format!("CPU: {}", self.cpu_debug_info)),
+                crossterm::terminal::Clear(crossterm::terminal::ClearType::UntilNewLine),
+                ResetColor
+            )?;
+            debug_line += 1;
+        }
+
+        if !self.current_instruction_debug.is_empty() {
+            queue!(
+                stdout(),
+                MoveTo(offset_x, debug_line),
+                SetForegroundColor(Color::Magenta),
+                Print(format!("INST: {}", self.current_instruction_debug)),
+                crossterm::terminal::Clear(crossterm::terminal::ClearType::UntilNewLine),
                 ResetColor
             )?;
         }
@@ -476,7 +511,11 @@ impl Chip8 {
     ];
     const BYTES_PER_FONT: u16 = 5;
 
-    fn new(version: Chip8Version, config: Chip8Config, input_handler: input::KeyEventHandler) -> Self {
+    fn new(
+        version: Chip8Version,
+        config: Chip8Config,
+        input_handler: input::KeyEventHandler,
+    ) -> Self {
         Self {
             version: version,
             config,
@@ -664,21 +703,16 @@ impl Chip8 {
 
     fn get_cpu_debug_info(&self) -> Option<String> {
         if self.config.debug {
-            // Get current key state
-            let pressed_keys: Vec<u8> = (0u8..16).filter(|&k| self.input.is_key_pressed(k)).collect();
-            let pressed_key_str = if pressed_keys.is_empty() {
-                "None".to_string()
-            } else {
-                pressed_keys.iter().map(|k| format!("{:X}", k)).collect::<Vec<_>>().join(",")
-            };
-            
             // Get registers in hex
-            let reg_str = (0..16).map(|i| format!("V{:X}={:02X}", i, self.gen_r[i]))
-                                 .collect::<Vec<_>>()
-                                 .join(" ");
-            
-            Some(format!("PC:{:04X} I:{:04X} Keys:[{}] Regs:[{}]", 
-                        self.pc_r, self.index_r, pressed_key_str, reg_str))
+            let reg_str = (0..Self::REGISTER_COUNT)
+                .map(|i| format!("V{:X}={:02X}", i, self.gen_r[i]))
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            Some(format!(
+                "PC:{:04X} I:{:04X} Regs:[{}]",
+                self.pc_r, self.index_r, reg_str
+            ))
         } else {
             None
         }
@@ -812,7 +846,7 @@ impl Chip8 {
         crossterm::terminal::enable_raw_mode().unwrap();
         let cycle_time = Duration::from_nanos(1_000_000_000 / Self::CPU_FREQ_HZ as u64);
         let mut debug_clear_timer = Instant::now();
-        
+
         loop {
             let cycle_start = Instant::now();
 
@@ -834,12 +868,19 @@ impl Chip8 {
 
             let raw = self.fetch();
             let inst = self.decode(&raw);
-            
+
             // Set CPU debug info if debug mode is enabled
             if let Some(cpu_debug) = self.get_cpu_debug_info() {
                 self.screen.set_cpu_debug_info(cpu_debug);
             }
-            
+
+            // Set current instruction debug info if debug mode is enabled
+            if self.config.debug {
+                let addr = Address(self.pc_r);
+                let inst_debug = format!("{}: Code {}, {}", addr, raw, inst);
+                self.screen.set_current_instruction_debug(inst_debug);
+            }
+
             self.execute(&inst);
 
             // Flush screen to display debug info if in debug mode
@@ -877,7 +918,11 @@ struct Args {
     #[arg(long, action = clap::ArgAction::SetTrue, help = "Enable debug mode showing CPU state each cycle")]
     debug: bool,
 
-    #[arg(long, default_value = "qwerty", help = "Keyboard layout: qwerty, natural, or sequential")]
+    #[arg(
+        long,
+        default_value = "qwerty",
+        help = "Keyboard layout: qwerty, natural, or sequential"
+    )]
     layout: String,
 }
 
@@ -885,7 +930,7 @@ fn main() -> io::Result<()> {
     let args = Args::parse();
     println!("Reading file {}", args.rom_file);
     let bytes = fs::read(args.rom_file).expect("Could not read file");
-    
+
     if args.dump_inst {
         Chip8::dump_inst(&bytes);
     } else {
@@ -899,28 +944,31 @@ fn main() -> io::Result<()> {
                 input::KeyboardLayout::Qwerty
             }
         };
-        
+
         // Create input configuration
         let input_config = input::InputConfig {
             layout,
             enable_debug: args.debug,
             ..Default::default()
         };
-        
+
         // Create input handler
         let input_handler = input::KeyEventHandler::new(input_config);
-        
+
         // Print layout info
         if args.debug {
-            println!("Using keyboard layout:\n{}", input_handler.get_layout_description());
+            println!(
+                "Using keyboard layout:\n{}",
+                input_handler.get_layout_description()
+            );
         }
-        
+
         // Create emulator
         let config = Chip8Config { debug: args.debug };
         let mut chip8 = Chip8::new(Chip8Version::COSMAC, config, input_handler);
         chip8.load_rom(&bytes);
         chip8.cycle();
     }
-    
+
     Ok(())
 }
