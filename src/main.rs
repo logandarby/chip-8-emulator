@@ -338,9 +338,6 @@ impl Screen {
         let offset_x = (term_width.saturating_sub(display_width)) / 2;
         let offset_y = (term_height.saturating_sub(display_height)) / 2;
 
-        // Clear screen
-        queue!(stdout(), Clear(ClearType::All))?;
-
         // Draw display centered
         for y in 0..Screen::N_ROWS {
             queue!(stdout(), MoveTo(offset_x, offset_y + y as u16))?;
@@ -489,7 +486,7 @@ impl Chip8 {
     pub const REGISTER_COUNT: usize = 16; // 16 General Purpose Registers
     pub const MEMORY_SIZE: usize = 4096; // 4KB memory
     const ENTRY_POINT: u16 = 0x200; // Where a program is expected to start
-    const CPU_FREQ_HZ: u16 = 1000;
+    const CPU_FREQ_HZ: u16 = 500;
     const TIMER_FREQ_HQ: u16 = 60;
     const INPUT_POLL_RATE: Duration = Duration::from_millis(50);
 
