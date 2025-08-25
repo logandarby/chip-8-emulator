@@ -4,6 +4,7 @@ use std::{
     fmt::{Debug, Display},
     fs,
     io::{self, Write},
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -289,6 +290,7 @@ struct Screen {
     debug_info: String,
     cpu_debug_info: String,
     current_instruction_debug: String,
+    step_mode_prompt: String,
 }
 
 impl Screen {
@@ -306,6 +308,7 @@ impl Screen {
             debug_info: String::new(),
             cpu_debug_info: String::new(),
             current_instruction_debug: String::new(),
+            step_mode_prompt: String::new(),
         }
     }
 
@@ -350,6 +353,14 @@ impl Screen {
         self.current_instruction_debug = info;
     }
 
+    fn set_step_mode_prompt(&mut self, prompt: String) {
+        self.step_mode_prompt = prompt;
+    }
+
+    fn clear_step_mode_prompt(&mut self) {
+        self.step_mode_prompt.clear();
+    }
+
     // Draws to the console
     fn flush(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         use crossterm::{cursor::*, queue, style::*};
@@ -361,12 +372,15 @@ impl Screen {
         let display_height = Screen::N_ROWS as u16;
         let offset_x = (term_width.saturating_sub(display_width)) / 2;
 
-        // Reserve space at bottom for debug info (title + escape text + up to 3 debug lines)
-        let bottom_reserve = if !self.debug_info.is_empty()
+        // Check if we have any debug info to display
+        let has_debug_info = !self.debug_info.is_empty()
             || !self.cpu_debug_info.is_empty()
             || !self.current_instruction_debug.is_empty()
-        {
-            7 // Title + escape + up to 3 debug lines + some padding
+            || !self.step_mode_prompt.is_empty();
+
+        // Reserve space at bottom
+        let bottom_reserve = if has_debug_info {
+            6 // Up to 4 debug lines + some padding (no title/escape when debugging)
         } else {
             4 // Just title + escape + padding
         };
@@ -392,17 +406,19 @@ impl Screen {
             queue!(stdout(), ResetColor)?;
         }
 
-        // Add title
-        queue!(
-            stdout(),
-            MoveTo(offset_x, offset_y.saturating_sub(2)),
-            Print("CHIP-8 Emulator"),
-            MoveTo(offset_x, offset_y + display_height + 1),
-            Print("Press 'Escape' to quit")
-        )?;
+        // Add title (only when not in debug or step mode to save space)
+        if !has_debug_info {
+            queue!(
+                stdout(),
+                MoveTo(offset_x, offset_y.saturating_sub(2)),
+                Print("CHIP-8 Emulator"),
+                MoveTo(offset_x, offset_y + display_height + 1),
+                Print("Press 'Escape' to quit")
+            )?;
+        }
 
-        // Add debug info right after the "Press Escape" text
-        let mut debug_line = offset_y + display_height + 2;
+        // Add debug info right after the display (no title when debugging)
+        let mut debug_line = offset_y + display_height + 1;
         if !self.debug_info.is_empty() {
             queue!(
                 stdout(),
@@ -436,6 +452,18 @@ impl Screen {
                 crossterm::terminal::Clear(crossterm::terminal::ClearType::UntilNewLine),
                 ResetColor
             )?;
+            debug_line += 1;
+        }
+
+        if !self.step_mode_prompt.is_empty() {
+            queue!(
+                stdout(),
+                MoveTo(offset_x, debug_line),
+                SetForegroundColor(Color::Green),
+                Print(format!("{}", self.step_mode_prompt)),
+                crossterm::terminal::Clear(crossterm::terminal::ClearType::UntilNewLine),
+                ResetColor
+            )?;
         }
 
         stdout().flush()?;
@@ -466,6 +494,7 @@ enum Chip8Version {
 
 struct Chip8Config {
     debug: bool,
+    step_mode: bool,
 }
 
 struct Chip8 {
@@ -478,6 +507,8 @@ struct Chip8 {
     index_r: u16,                      // Index Register
     gen_r: [u8; Self::REGISTER_COUNT], // General Purpose Registers
     stack: Vec<u16>,                   // Stack
+    paused: Arc<Mutex<bool>>,          // For step mode: whether execution is paused
+    step_requested: Arc<Mutex<bool>>,  // For step mode: whether a single step is requested
                                        // delay timer
                                        // sound timer
 }
@@ -516,7 +547,10 @@ impl Chip8 {
         config: Chip8Config,
         input_handler: input::KeyEventHandler,
     ) -> Self {
-        Self {
+        let paused = Arc::new(Mutex::new(config.step_mode)); // Start paused if in step mode
+        let step_requested = Arc::new(Mutex::new(false));
+
+        let mut chip8 = Self {
             version: version,
             config,
             screen: Screen::new(),
@@ -526,7 +560,16 @@ impl Chip8 {
             pc_r: Self::ENTRY_POINT,
             index_r: 0,
             stack: Vec::new(),
+            paused,
+            step_requested,
+        };
+
+        // Set up step mode callbacks if enabled
+        if chip8.config.step_mode {
+            chip8.setup_step_mode_callbacks();
         }
+
+        chip8
     }
 
     fn load_rom(&mut self, bytes: &Vec<u8>) {
@@ -785,7 +828,6 @@ impl Chip8 {
             Return => {
                 let return_addr = self.stack.pop().expect("CRITICAL: Stack is empty");
                 self.pc_r = return_addr;
-                return;
             }
             Skip(skipif, reg, value) => {
                 let eq = self.register_val(reg) == value.0.into();
@@ -842,56 +884,190 @@ impl Chip8 {
         self.increment_pc();
     }
 
-    fn cycle(&mut self) {
-        crossterm::terminal::enable_raw_mode().unwrap();
-        let cycle_time = Duration::from_nanos(1_000_000_000 / Self::CPU_FREQ_HZ as u64);
-        let mut debug_clear_timer = Instant::now();
+    fn setup_step_mode_callbacks(&mut self) {
+        use crossterm::event::KeyCode;
 
-        loop {
-            let cycle_start = Instant::now();
+        // Set up space key callback for play/pause toggle
+        let paused_clone = Arc::clone(&self.paused);
+        self.input.register_special_key_callback(
+            KeyCode::Char(' '),
+            Box::new(move || {
+                if let Ok(mut paused) = paused_clone.lock() {
+                    *paused = !*paused;
+                }
+            }),
+        );
 
-            if !self.input.update().unwrap_or(false) {
-                break;
+        // Set up enter key callback for single step
+        let paused_clone2 = Arc::clone(&self.paused);
+        let step_requested_clone = Arc::clone(&self.step_requested);
+        self.input.register_special_key_callback(
+            KeyCode::Enter,
+            Box::new(move || {
+                // Single step only works when paused
+                if let (Ok(paused), Ok(mut step_requested)) =
+                    (paused_clone2.lock(), step_requested_clone.lock())
+                {
+                    if *paused {
+                        *step_requested = true;
+                    }
+                }
+            }),
+        );
+    }
+
+    fn is_paused(&self) -> bool {
+        *self.paused.lock().unwrap_or_else(|_| std::process::exit(1))
+    }
+
+    fn take_step_request(&self) -> bool {
+        if let Ok(mut step_requested) = self.step_requested.lock() {
+            if *step_requested {
+                *step_requested = false;
+                return true;
+            }
+        }
+        false
+    }
+
+    fn update_step_mode_prompt(&mut self) {
+        if self.config.step_mode {
+            let controls = if self.is_paused() {
+                "[PAUSED] SPACE=Play, ENTER=Step, ESC=Quit"
+            } else {
+                "[PLAYING] SPACE=Pause, ESC=Quit"
             };
 
-            // Update debug info from input handler
-            if let Some(debug_info) = self.input.get_debug_info() {
-                self.screen.set_debug_info(debug_info);
-                debug_clear_timer = Instant::now();
+            let step_prompt = format!("STEP MODE: {}", controls);
+            self.screen.set_step_mode_prompt(step_prompt);
+        } else {
+            self.screen.clear_step_mode_prompt();
+        }
+    }
+
+    fn initialize_cycle(&mut self) -> (Duration, Instant) {
+        crossterm::terminal::enable_raw_mode().unwrap();
+        let cycle_time = Duration::from_nanos(1_000_000_000 / Self::CPU_FREQ_HZ as u64);
+        let debug_clear_timer = Instant::now();
+        (cycle_time, debug_clear_timer)
+    }
+
+    fn handle_input_and_debug(&mut self, debug_clear_timer: &mut Instant) -> bool {
+        // Update input and check for quit
+        if !self.input.update().unwrap_or(false) {
+            return false; // Signal to quit
+        }
+
+        // Update debug info from input handler
+        if let Some(debug_info) = self.input.get_debug_info() {
+            self.screen.set_debug_info(debug_info);
+            *debug_clear_timer = Instant::now();
+        }
+
+        // Clear debug info after 2 seconds of no new input
+        if debug_clear_timer.elapsed() > Duration::from_secs(2) {
+            self.screen.clear_debug_info();
+            self.input.clear_last_key();
+        }
+
+        true // Continue running
+    }
+
+    fn should_execute_instruction(&mut self) -> bool {
+        let should_execute = if self.config.step_mode {
+            if self.is_paused() {
+                // Check if a step was requested
+                self.take_step_request()
+            } else {
+                // Not paused, execute normally
+                true
             }
+        } else {
+            // Not in step mode, execute normally
+            true
+        };
 
-            // Clear debug info after 2 seconds of no new input
-            if debug_clear_timer.elapsed() > Duration::from_secs(2) {
-                self.screen.clear_debug_info();
-                self.input.clear_last_key();
+        if !should_execute {
+            // In step mode and paused, just update display and wait
+            self.update_display_when_paused();
+            return false;
+        }
+
+        true
+    }
+
+    fn update_display_when_paused(&mut self) {
+        let raw = self.fetch();
+        let inst = self.decode(&raw);
+
+        // Set CPU debug info if debug mode is enabled
+        if let Some(cpu_debug) = self.get_cpu_debug_info() {
+            self.screen.set_cpu_debug_info(cpu_debug);
+        }
+
+        // Set current instruction debug info
+        let addr = Address(self.pc_r);
+        let inst_debug = format!("{}: Code {}, {}", addr, raw, inst);
+        self.screen.set_current_instruction_debug(inst_debug);
+
+        // Update prompt to show current state
+        self.update_step_mode_prompt();
+
+        // Flush screen
+        let _ = self.screen.flush();
+
+        // Short sleep to avoid busy waiting
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    fn execute_instruction_cycle(&mut self) {
+        let raw = self.fetch();
+        let inst = self.decode(&raw);
+
+        // Set CPU debug info if debug mode is enabled
+        if let Some(cpu_debug) = self.get_cpu_debug_info() {
+            self.screen.set_cpu_debug_info(cpu_debug);
+        }
+
+        // Set current instruction debug info if debug mode or step mode is enabled
+        if self.config.debug || self.config.step_mode {
+            let addr = Address(self.pc_r);
+            let inst_debug = format!("{}: Code {}, {}", addr, raw, inst);
+            self.screen.set_current_instruction_debug(inst_debug);
+            // Update step mode prompt if in step mode
+            if self.config.step_mode {
+                self.update_step_mode_prompt();
             }
+        }
+        self.execute(&inst);
+        // Flush screen to display debug info if in debug mode or step mode
+        if self.config.debug || self.config.step_mode {
+            let _ = self.screen.flush();
+        }
+    }
 
-            let raw = self.fetch();
-            let inst = self.decode(&raw);
-
-            // Set CPU debug info if debug mode is enabled
-            if let Some(cpu_debug) = self.get_cpu_debug_info() {
-                self.screen.set_cpu_debug_info(cpu_debug);
-            }
-
-            // Set current instruction debug info if debug mode is enabled
-            if self.config.debug {
-                let addr = Address(self.pc_r);
-                let inst_debug = format!("{}: Code {}, {}", addr, raw, inst);
-                self.screen.set_current_instruction_debug(inst_debug);
-            }
-
-            self.execute(&inst);
-
-            // Flush screen to display debug info if in debug mode
-            if self.config.debug {
-                let _ = self.screen.flush();
-            }
-
+    fn handle_cycle_timing(&self, cycle_start: Instant, cycle_time: Duration) {
+        if !self.config.step_mode || !self.is_paused() {
             let elapsed = cycle_start.elapsed();
             if elapsed < cycle_time {
                 thread::sleep(cycle_time - elapsed);
             }
+        }
+    }
+
+    fn cycle(&mut self) {
+        let (cycle_time, mut debug_clear_timer) = self.initialize_cycle();
+        loop {
+            let cycle_start = Instant::now();
+            if !self.handle_input_and_debug(&mut debug_clear_timer) {
+                break;
+            }
+            // Handle step mode logic
+            if !self.should_execute_instruction() {
+                continue;
+            }
+            self.execute_instruction_cycle();
+            self.handle_cycle_timing(cycle_start, cycle_time);
         }
         crossterm::terminal::disable_raw_mode().unwrap();
     }
@@ -917,6 +1093,9 @@ struct Args {
 
     #[arg(long, action = clap::ArgAction::SetTrue, help = "Enable debug mode showing CPU state each cycle")]
     debug: bool,
+
+    #[arg(long, action = clap::ArgAction::SetTrue, help = "Enable step mode - pause after each instruction (requires space/enter to continue)")]
+    step: bool,
 
     #[arg(
         long,
@@ -964,7 +1143,10 @@ fn main() -> io::Result<()> {
         }
 
         // Create emulator
-        let config = Chip8Config { debug: args.debug };
+        let config = Chip8Config {
+            debug: args.debug,
+            step_mode: args.step,
+        };
         let mut chip8 = Chip8::new(Chip8Version::COSMAC, config, input_handler);
         chip8.load_rom(&bytes);
         chip8.cycle();

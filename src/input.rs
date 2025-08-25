@@ -2,6 +2,9 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use std::collections::HashMap;
 use std::time::Duration;
 
+/// Callback function type for special key handling
+pub type KeyCallback = Box<dyn FnMut() + Send>;
+
 /// Keyboard layout options for CHIP-8 input mapping
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum KeyboardLayout {
@@ -46,6 +49,7 @@ pub struct KeyEventHandler {
     key_mapping: HashMap<KeyCode, u8>,
     chip8_keys: [bool; 16],
     last_key_pressed: Option<u8>,
+    special_key_callbacks: HashMap<KeyCode, KeyCallback>,
 }
 
 impl KeyEventHandler {
@@ -55,6 +59,7 @@ impl KeyEventHandler {
             key_mapping: HashMap::new(),
             chip8_keys: [false; 16],
             last_key_pressed: None,
+            special_key_callbacks: HashMap::new(),
         };
 
         handler.setup_key_mapping();
@@ -162,6 +167,16 @@ impl KeyEventHandler {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         let pressed = matches!(key_event.kind, KeyEventKind::Press);
 
+        // Check for special key callbacks first (only on key press)
+        if pressed && self.special_key_callbacks.contains_key(&key_event.code) {
+            // Trigger the callback for this special key
+            if let Some(mut callback) = self.special_key_callbacks.remove(&key_event.code) {
+                callback();
+                self.special_key_callbacks.insert(key_event.code, callback);
+            }
+            return;
+        }
+
         // Map physical key to CHIP-8 key
         if let Some(&chip8_key) = self.key_mapping.get(&key_event.code) {
             if pressed {
@@ -171,6 +186,11 @@ impl KeyEventHandler {
                 self.chip8_keys[chip8_key as usize] = false;
             }
         }
+    }
+
+    /// Register a callback for a special key
+    pub fn register_special_key_callback(&mut self, key: KeyCode, callback: KeyCallback) {
+        self.special_key_callbacks.insert(key, callback);
     }
 
     /// Check if a specific CHIP-8 key is currently pressed
