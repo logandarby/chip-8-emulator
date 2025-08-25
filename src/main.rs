@@ -101,6 +101,8 @@ impl Instruction {
 
 struct Screen {
     pixels: [bool; Self::N_PIXELS as usize],
+    // Private buffer to collect output before printing
+    buffer: String,
 }
 
 impl Screen {
@@ -108,10 +110,14 @@ impl Screen {
     pub const N_ROWS: u8 = 32;
     pub const N_COLS: u8 = 64;
     pub const N_PIXELS: u16 = Self::N_ROWS as u16 * Self::N_COLS as u16;
+    // Hide cursor, clear screen, and move to top-left
+    const ANSI_ESCAPE: &str = "\x1B[?25l\x1B[2J\x1B[H";
+    const BUFFER_SIZE: usize = Self::ANSI_ESCAPE.len() + (Self::N_COLS as usize * 2 + 2) * Self::N_ROWS as usize;
 
     fn new() -> Self {
         Self {
             pixels: [false; Self::N_PIXELS as usize],
+            buffer: String::with_capacity(Self::BUFFER_SIZE),
         }
     }
 
@@ -133,21 +139,24 @@ impl Screen {
 
     fn clear(&mut self) {
         self.pixels.fill(false);
-        self.flush();
+        print!("{}", Self::ANSI_ESCAPE);
+        io::stdout().flush().unwrap();
     }
   
     // Draws to the console
-    fn flush(&self) {
-        // return;
-         // Clear screen (ANSI escape code)
-        print!("\x1B[2J\x1B[H");
+    fn flush(&mut self) {
+        self.buffer.clear();
+        self.buffer.push_str(Self::ANSI_ESCAPE);
         for y in 0..Self::N_ROWS {
             for x in 0..Self::N_COLS {
                 let pixel = self.get_pixel(x, y).unwrap();
-                print!("{}", if pixel { "██" } else { "  " });
+                self.buffer.push_str(if pixel { "██" } else { "  " });
             }
-            println!();
+            if y < Self::N_ROWS - 1 {
+                self.buffer.push('\n');
+            }
         }
+        print!("{}", self.buffer);
         io::stdout().flush().unwrap();
     }
 }
