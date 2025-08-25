@@ -261,27 +261,36 @@ impl Chip8 {
             // to 0
             // The starting coordinate wraps, but the drawing is clipped
             Draw(regx, regy, row_count) => {
-                let mut x = *self.register_val(regx) % Screen::N_COLS;
-                let mut y = *self.register_val(regy) % Screen::N_ROWS;
+                let start_x = *self.register_val(regx) % Screen::N_COLS;
+                let start_y = *self.register_val(regy) % Screen::N_ROWS;
                 *self.vf() = 0;
                 let index_addr = self.index_r;
+                
                 for row in 0..row_count.0 {
-                    let sprite_data = self.load_from_addr(index_addr + row as u16);
-                    for bit_pos in 0..8 {
-                        let sprite_bit = (sprite_data >> (7 - bit_pos)) & 1;
-                        let pixel = match self.screen.get_pixel(x, y) {
-                            Some(x) => x,
-                            None => continue,
-                        };
-                        if sprite_bit == 1 && pixel == true {
-                            self.screen.set_pixel(x, y, false);
-                            *self.vf() = 1;
-                        } else if sprite_bit == 1 && pixel == false {
-                            self.screen.set_pixel(x, y, true);
-                        }
-                        x += 1;
+                    let y = start_y + row;
+                    if y >= Screen::N_ROWS {
+                        break;
                     }
-                    y += 1;
+                    
+                    let sprite_data = self.load_from_addr(index_addr + row as u16);
+                    
+                    for bit_pos in 0..8 {
+                        let x = start_x + bit_pos;
+                        if x >= Screen::N_COLS {
+                            break;
+                        }
+                        
+                        let sprite_bit = (sprite_data >> (7 - bit_pos)) & 1;
+                        if sprite_bit == 1 {
+                            let pixel = self.screen.get_pixel(x, y).unwrap();
+                            if pixel {
+                                self.screen.set_pixel(x, y, false);
+                                *self.vf() = 1;
+                            } else {
+                                self.screen.set_pixel(x, y, true);
+                            }
+                        }
+                    }
                 }
                 self.screen.flush();
             } // _ => panic!("Invalid Instruction {:#?}", inst),
