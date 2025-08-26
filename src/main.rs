@@ -867,7 +867,7 @@ impl Chip8 {
             }
             SetSoundTimer(reg) => self.sound_timer = self.register_val(reg),
             SetDelayTimer(reg) => self.delay_timer = self.register_val(reg),
-            GetDelayTimer(reg) => self.register_set(reg, self.delay_timer),
+            GetDelayTimer(reg) => self.register_set(reg, value),
             // Takes the decimal digits of the value in reg and stores them in memory starting with
             // index
             BinaryDecimalConv(reg) => {
