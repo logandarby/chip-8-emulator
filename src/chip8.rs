@@ -34,6 +34,7 @@ impl Chip8 {
     pub const CPU_FREQ_HZ: f64 = 500.0;
     pub const TIMER_HZ: f64 = 60.0;
     pub const SCREEN_HZ: f64 = 60.0;
+    pub const INPUT_POLL_RATE_MS: u64 = 10;
 
     // Default font loaded into memory before the application
     pub const FONT_START_ADDR: u16 = 0x50;
@@ -101,9 +102,9 @@ impl Chip8 {
     }
 
     pub async fn cycle(&mut self) {
-        // crossterm::terminal::enable_raw_mode().unwrap();
-        Chip8Orchaestrator::run(&mut self.hardware).await;
-        // crossterm::terminal::disable_raw_mode().unwrap();
+        crossterm::terminal::enable_raw_mode().unwrap();
+        Chip8Orchaestrator::run(&mut self.hardware, &mut self.input).await;
+        crossterm::terminal::disable_raw_mode().unwrap();
     }
 }
 

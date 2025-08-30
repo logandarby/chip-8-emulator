@@ -82,7 +82,6 @@ async fn main() -> io::Result<()> {
         // Create input configuration
         let input_config = input::InputConfig {
             layout,
-            enable_debug: args.debug,
             ..Default::default()
         };
 

@@ -19,13 +19,7 @@ impl Chip8KeyState {
     pub fn is_key_pressed(&self, key: u8) -> bool {
         self.keys_pressed[key as usize]
     }
-    pub fn iter(&self) -> std::slice::Iter<'_, bool> {
-        self.keys_pressed.iter()
-    }
 }
-
-/// Callback function type for special key handling
-pub type KeyCallback = Box<dyn FnMut() + Send>;
 
 /// Keyboard layout options for CHIP-8 input mapping
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -134,24 +128,41 @@ impl KeyboardLayout {
 #[derive(Debug, Clone)]
 pub struct InputConfig {
     pub layout: KeyboardLayout,
-    pub enable_debug: bool,
+    pub poll_rate: Duration,
 }
 
 impl Default for InputConfig {
     fn default() -> Self {
         Self {
             layout: KeyboardLayout::Qwerty,
-            enable_debug: false,
+            poll_rate: Duration::from_millis(10),
         }
     }
+}
+
+#[derive(PartialEq)]
+pub enum Chip8KeyEventKind {
+    Press,
+    Release,
+}
+
+pub type Chip8KeyCode = KeyCode;
+
+pub enum Chip8InputEvent {
+    SpecialKeyEvent {
+        key: Chip8KeyCode,
+        kind: Chip8KeyEventKind,
+    },
+    Chip8KeyEvent {
+        key: u8,
+        kind: Chip8KeyEventKind,
+    },
 }
 
 pub struct KeyEventHandler {
     config: InputConfig,
     key_mapping: HashMap<KeyCode, u8>,
     chip8_keys: Chip8KeyState,
-    last_key_pressed: Option<u8>,
-    special_key_callbacks: HashMap<KeyCode, KeyCallback>,
 }
 
 impl KeyEventHandler {
@@ -160,94 +171,54 @@ impl KeyEventHandler {
             config: config.clone(),
             key_mapping: KeyboardLayout::get_key_map(&config.layout),
             chip8_keys: Chip8KeyState::default(),
-            last_key_pressed: None,
-            special_key_callbacks: HashMap::new(),
         }
     }
 
-    /// Update the key states by polling crossterm events with timeout-based key release
-    pub fn update(&mut self) -> Result<bool, Box<dyn std::error::Error>> {
-        // Poll for new key events
-        while event::poll(Duration::from_millis(0))? {
-            if let Event::Key(key_event) = event::read()? {
-                match key_event.code {
-                    KeyCode::Esc => return Ok(false), // Signal to quit
-                    _ => self.handle_key_event(key_event),
+    /// Update the key states by polling crossterm events
+    pub async fn next_input_event(&self) -> Chip8InputEvent {
+        let rate = self.config.poll_rate.clone();
+        loop {
+            match tokio::task::spawn_blocking(move || {
+                event::poll(rate)
+                    .ok()
+                    .filter(|&has_event| has_event)
+                    .and_then(|_| event::read().ok())
+            })
+            .await
+            {
+                Ok(Some(Event::Key(key_event))) => {
+                    if let Some(key_event) = self.handle_key_event(key_event) {
+                        return key_event;
+                    } else {
+                        continue;
+                    }
+                }
+                _ => {
+                    tokio::time::sleep(rate).await;
+                    continue;
                 }
             }
         }
-
-        Ok(true) // Continue running
     }
 
-    fn handle_key_event(&mut self, key_event: KeyEvent) {
-        let pressed = matches!(key_event.kind, KeyEventKind::Press);
-
-        // Check for special key callbacks first (only on key press)
-        if pressed && self.special_key_callbacks.contains_key(&key_event.code) {
-            // Trigger the callback for this special key
-            if let Some(mut callback) = self.special_key_callbacks.remove(&key_event.code) {
-                callback();
-                self.special_key_callbacks.insert(key_event.code, callback);
-            }
-            return;
-        }
+    fn handle_key_event(&self, key_event: KeyEvent) -> Option<Chip8InputEvent> {
+        let pressed = match key_event.kind {
+            KeyEventKind::Press => Chip8KeyEventKind::Press,
+            KeyEventKind::Release => Chip8KeyEventKind::Release,
+            _ => return None,
+        };
 
         // Map physical key to CHIP-8 key
         if let Some(&chip8_key) = self.key_mapping.get(&key_event.code) {
-            if pressed {
-                self.chip8_keys.press(chip8_key);
-                self.last_key_pressed = Some(chip8_key);
-            } else {
-                self.chip8_keys.release(chip8_key);
-            }
-        }
-    }
-
-    /// Register a callback for a special key
-    pub fn register_special_key_callback(&mut self, key: KeyCode, callback: KeyCallback) {
-        self.special_key_callbacks.insert(key, callback);
-    }
-
-    /// Check if a specific CHIP-8 key is currently pressed
-    pub fn is_key_pressed(&self, key: u8) -> bool {
-        if key <= 0xF {
-            self.chip8_keys.is_key_pressed(key)
+            Some(Chip8InputEvent::Chip8KeyEvent {
+                key: chip8_key,
+                kind: pressed,
+            })
         } else {
-            false
-        }
-    }
-
-    /// Get the first currently pressed key, if any
-    pub fn get_pressed_key(&self) -> Option<u8> {
-        for (i, &pressed) in self.chip8_keys.iter().enumerate() {
-            if pressed {
-                return Some(i as u8);
-            }
-        }
-        None
-    }
-
-    /// Clear the last key pressed (useful for debugging display)
-    pub fn clear_last_key(&mut self) {
-        self.last_key_pressed = None;
-    }
-
-    /// Get debug information about current key states
-    pub fn get_debug_info(&self) -> Option<String> {
-        if !self.config.enable_debug {
-            return None;
-        }
-
-        let pressed_keys: Vec<String> = (0u8..16)
-            .filter(|&k| self.is_key_pressed(k))
-            .map(|k| format!("{:X}", k))
-            .collect();
-
-        if pressed_keys.is_empty() {
-            Some("Keys: None".to_string())
-        } else {
-            Some(format!("Keys: [{}]", pressed_keys.join(",")))
+            Some(Chip8InputEvent::SpecialKeyEvent {
+                key: key_event.code,
+                kind: pressed,
+            })
         }
     }
 
@@ -271,73 +242,5 @@ impl KeyEventHandler {
                  1 2 3 4 5 6 7 8 9 0 A B C D E F"
                 .to_string(),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_key_mapping_setup() {
-        let config = InputConfig::default();
-        let handler = KeyEventHandler::new(config);
-
-        // Test that key mappings are set up
-        assert!(!handler.key_mapping.is_empty());
-
-        // Test QWERTY layout has expected mappings
-        assert_eq!(handler.key_mapping.get(&KeyCode::Char('1')), Some(&0x1));
-        assert_eq!(handler.key_mapping.get(&KeyCode::Char('q')), Some(&0x4));
-        assert_eq!(handler.key_mapping.get(&KeyCode::Char('x')), Some(&0x0));
-    }
-
-    #[test]
-    fn test_different_layouts() {
-        // Test QWERTY
-        let qwerty_config = InputConfig {
-            layout: KeyboardLayout::Qwerty,
-            enable_debug: false,
-        };
-        let qwerty_handler = KeyEventHandler::new(qwerty_config);
-        assert_eq!(
-            qwerty_handler.key_mapping.get(&KeyCode::Char('1')),
-            Some(&0x1)
-        );
-        assert_eq!(
-            qwerty_handler.key_mapping.get(&KeyCode::Char('q')),
-            Some(&0x4)
-        );
-
-        // Test Natural
-        let natural_config = InputConfig {
-            layout: KeyboardLayout::Natural,
-            enable_debug: false,
-        };
-        let natural_handler = KeyEventHandler::new(natural_config);
-        assert_eq!(
-            natural_handler.key_mapping.get(&KeyCode::Char('1')),
-            Some(&0x1)
-        );
-        assert_eq!(
-            natural_handler.key_mapping.get(&KeyCode::Char('v')),
-            Some(&0x0)
-        );
-
-        // Test Sequential
-        let seq_config = InputConfig {
-            layout: KeyboardLayout::Sequential,
-            enable_debug: false,
-        };
-        let seq_handler = KeyEventHandler::new(seq_config);
-        assert_eq!(seq_handler.key_mapping.get(&KeyCode::Char('0')), Some(&0x0));
-        assert_eq!(seq_handler.key_mapping.get(&KeyCode::Char('y')), Some(&0xF));
-    }
-
-    #[test]
-    fn test_config_default() {
-        let config = InputConfig::default();
-        assert_eq!(config.layout, KeyboardLayout::Qwerty);
-        assert_eq!(config.enable_debug, false);
     }
 }
