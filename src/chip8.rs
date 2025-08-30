@@ -22,11 +22,11 @@ pub struct Chip8Config {
 
 pub struct Chip8 {
     // Config
-    config: Chip8Config,
+    pub config: Chip8Config,
     // CPU & Screen
-    hardware: Hardware,
+    pub hardware: Hardware,
     // Input,
-    input: KeyEventHandler,
+    pub input: KeyEventHandler,
 }
 
 impl Chip8 {
@@ -62,7 +62,7 @@ impl Chip8 {
         Self {
             config: config.clone(),
             hardware: Hardware::new(HardwareExecutionConfig {
-                version: config.version
+                version: config.version,
             }),
             input: input_handler,
         }
@@ -72,13 +72,17 @@ impl Chip8 {
     // execution
     pub fn load_rom(&mut self, bytes: &Vec<u8>) -> Result<(), ()> {
         // Load Fonts into memory
-        self.hardware.cpu
+        self.hardware
+            .cpu
             .store_memory_slice(Self::FONT_START_ADDR as usize, &Self::FONT)
             .expect("Fonts should fit into memory");
         // Load ROM into memory
-        self.hardware.cpu
+        self.hardware
+            .cpu
             .store_memory_slice(Self::ENTRY_POINT.into(), bytes)?;
-        self.hardware.cpu.jump_to(&Address::new(Self::ENTRY_POINT).unwrap());
+        self.hardware
+            .cpu
+            .jump_to(&Address::new(Self::ENTRY_POINT).unwrap());
         Ok(())
     }
 
@@ -103,7 +107,7 @@ impl Chip8 {
 
     pub async fn cycle(&mut self) {
         crossterm::terminal::enable_raw_mode().unwrap();
-        Chip8Orchaestrator::run(&mut self.hardware, &mut self.input).await;
+        Chip8Orchaestrator::run(self).await;
         crossterm::terminal::disable_raw_mode().unwrap();
     }
 }

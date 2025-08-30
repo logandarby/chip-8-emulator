@@ -146,11 +146,15 @@ pub enum Chip8KeyEventKind {
     Release,
 }
 
-pub type Chip8KeyCode = KeyCode;
+pub enum Chip8Command {
+    Quit,
+    DebugStep,
+    DebugPlayPause,
+}
 
 pub enum Chip8InputEvent {
-    SpecialKeyEvent {
-        key: Chip8KeyCode,
+    CommandEvent {
+        command: Chip8Command,
         kind: Chip8KeyEventKind,
     },
     Chip8KeyEvent {
@@ -214,9 +218,16 @@ impl KeyEventHandler {
                 key: chip8_key,
                 kind: pressed,
             })
+        // Physical key for debug/quit commands
         } else {
-            Some(Chip8InputEvent::SpecialKeyEvent {
-                key: key_event.code,
+            let command = match key_event.code {
+                KeyCode::Esc => Chip8Command::Quit,
+                KeyCode::Char(' ') => Chip8Command::DebugPlayPause,
+                KeyCode::Enter => Chip8Command::DebugStep,
+                _ => return None,
+            };
+            Some(Chip8InputEvent::CommandEvent {
+                command,
                 kind: pressed,
             })
         }

@@ -25,7 +25,7 @@ macro_rules! validated_struct {
 
         impl std::ops::Deref for $name {
             type Target = $type;
-            
+
             fn deref(&self) -> &Self::Target {
                 &self.0
             }

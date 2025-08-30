@@ -4,19 +4,19 @@ use std::{
     panic,
 };
 
+mod chip8;
 mod cpu;
 mod decoder;
+mod hardware;
 mod input;
 mod macros;
 mod primitive;
-mod screen;
-mod chip8;
 mod scheduler;
-mod hardware;
+mod screen;
 mod util;
 
-use clap::Parser;
 use chip8::*;
+use clap::Parser;
 
 #[derive(Parser)]
 #[command(name = "chip8-emulator")]

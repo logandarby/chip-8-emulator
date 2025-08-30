@@ -1,9 +1,8 @@
-use std::time::Duration;
 use crate::{
     chip8::Chip8,
     decoder::Decoder,
     hardware::Hardware,
-    input::{Chip8InputEvent, Chip8KeyCode, Chip8KeyEventKind, Chip8KeyState, KeyEventHandler},
+    input::{Chip8Command, Chip8InputEvent, Chip8KeyEventKind, Chip8KeyState, KeyEventHandler},
     util,
 };
 use tokio::{select, sync::mpsc, time::interval};
@@ -48,8 +47,7 @@ pub struct ClockSheduler {
 }
 
 pub enum ClockControlMessage {
-    Pause,
-    Play,
+    TogglePausePlay,
     Step,
     Shutdown,
 }
@@ -59,16 +57,21 @@ impl ClockSheduler {
         &self,
         mut inbox: mpsc::Receiver<ClockControlMessage>,
         hardware_sender: mpsc::Sender<HardwareMessage>,
+        initial_is_running: bool,
     ) {
         let mut exec_interval = interval(util::hertz(self.hz));
-        let mut is_running = true;
+        let mut is_running = initial_is_running;
         let mut single_step_pending = false;
         loop {
             select! {
                 message = inbox.recv() => {
                     match message {
-                       Some(ClockControlMessage::Pause) => is_running = false,
-                        Some(ClockControlMessage::Play) => is_running = true,
+                       Some(ClockControlMessage::TogglePausePlay) => {
+                           is_running = !is_running;
+                           if is_running {
+                               exec_interval.reset();
+                           }
+                       },
                         Some(ClockControlMessage::Shutdown) => break,
                         Some(ClockControlMessage::Step) => single_step_pending = true,
                         None => break,
@@ -157,14 +160,25 @@ impl InputScheduler {
                     let _ = hardware_sender
                         .send(HardwareMessage::UpdateKeyState(self.key_state.clone()))
                         .await;
-                },
-                Chip8InputEvent::SpecialKeyEvent { key, kind } => {
-                    let pressed = kind == Chip8KeyEventKind::Press;
-                    match key {
-                        Chip8KeyCode::Esc if pressed => { let _ = clock_sender.send(ClockControlMessage::Shutdown).await; },
-                        _ => {}
+                }
+                Chip8InputEvent::CommandEvent { command, kind }
+                    if kind == Chip8KeyEventKind::Press =>
+                {
+                    match command {
+                        Chip8Command::Quit => {
+                            let _ = clock_sender.send(ClockControlMessage::Shutdown).await;
+                        }
+                        Chip8Command::DebugPlayPause => {
+                            let _ = clock_sender
+                                .send(ClockControlMessage::TogglePausePlay)
+                                .await;
+                        }
+                        Chip8Command::DebugStep => {
+                            let _ = clock_sender.send(ClockControlMessage::Step).await;
+                        }
                     };
-                },
+                }
+                _ => {}
             };
         }
     }
@@ -173,7 +187,7 @@ impl InputScheduler {
 pub struct Chip8Orchaestrator;
 
 impl Chip8Orchaestrator {
-    pub async fn run(hardware: &mut Hardware, input: &mut KeyEventHandler) {
+    pub async fn run(chip8: &mut Chip8) {
         // Comm channels
         let (hard_send, hard_recv) = mpsc::channel::<HardwareMessage>(100);
         let (clock_send, clock_recv) = mpsc::channel::<ClockControlMessage>(100);
@@ -187,15 +201,14 @@ impl Chip8Orchaestrator {
         let screen_scheulder = ScreenScheduler {
             hz: Chip8::SCREEN_HZ,
         };
-        let mut input_scheduler =
-            InputScheduler::new();
+        let mut input_scheduler = InputScheduler::new();
 
         select! {
             _ = timer_scheduler.run(hard_send.clone()) => {},
-            _ = clock_scheulder.run(clock_recv, hard_send.clone()) => {},
+            _ = clock_scheulder.run(clock_recv, hard_send.clone(), !chip8.config.debug) => {},
             _ = screen_scheulder.run(hard_send.clone()) => {},
-            _ = HardwareScheduler::run(hardware, hard_recv) => {},
-            _ = input_scheduler.run(input, hard_send, clock_send) => {},
+            _ = HardwareScheduler::run(&mut chip8.hardware, hard_recv) => {},
+            _ = input_scheduler.run(&mut chip8.input, hard_send, clock_send) => {},
         }
     }
 }

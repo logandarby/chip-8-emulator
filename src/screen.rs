@@ -1,6 +1,11 @@
-use std::io::{stdout, Write};
+use std::io::{Write, stdout};
 
-use crossterm::{self, cursor::{Hide, Show}, execute, queue, terminal::{EnterAlternateScreen, LeaveAlternateScreen}};
+use crossterm::{
+    self,
+    cursor::{Hide, Show},
+    execute, queue,
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen},
+};
 
 pub struct Screen {
     pixels: [bool; Self::N_PIXELS as usize],
@@ -184,7 +189,6 @@ impl Screen {
         assert!(y < Self::N_ROWS, "Y screen index is out of bounds");
         return y as usize * Self::N_COLS as usize + x as usize;
     }
-
 }
 
 impl Drop for Screen {

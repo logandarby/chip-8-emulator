@@ -1,12 +1,12 @@
+use crate::chip8::{Chip8, Chip8Version};
 use crate::cpu::CPU;
 use crate::input::Chip8KeyState;
 use crate::primitive::*;
 use crate::screen::Screen;
-use crate::chip8::{ Chip8Version, Chip8 };
 
 #[derive(Debug, Clone)]
 pub struct HardwareExecutionConfig {
-    pub version: Chip8Version
+    pub version: Chip8Version,
 }
 
 // Manages the internal state of the CPU and the Screen
@@ -18,8 +18,7 @@ pub struct Hardware {
 }
 
 impl Hardware {
-    pub fn new(config: HardwareExecutionConfig,
-) -> Self {
+    pub fn new(config: HardwareExecutionConfig) -> Self {
         Self {
             cpu: CPU::new(),
             screen: Screen::new(),
