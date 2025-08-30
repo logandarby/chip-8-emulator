@@ -2,6 +2,28 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use std::collections::HashMap;
 use std::time::Duration;
 
+// Struct to store and send key state to different components
+#[derive(Default, Clone, Copy)]
+pub struct Chip8KeyState {
+    keys_pressed: [bool; Self::TOTAL_KEYS],
+}
+
+impl Chip8KeyState {
+    const TOTAL_KEYS: usize = 16;
+    pub fn press(&mut self, key: u8) {
+        self.keys_pressed[key as usize] = true;
+    }
+    pub fn release(&mut self, key: u8) {
+        self.keys_pressed[key as usize] = false;
+    }
+    pub fn is_key_pressed(&self, key: u8) -> bool {
+        self.keys_pressed[key as usize]
+    }
+    pub fn iter(&self) -> std::slice::Iter<'_, bool> {
+        self.keys_pressed.iter()
+    }
+}
+
 /// Callback function type for special key handling
 pub type KeyCallback = Box<dyn FnMut() + Send>;
 
@@ -28,6 +50,86 @@ pub enum KeyboardLayout {
     Sequential,
 }
 
+impl KeyboardLayout {
+    pub fn get_key_map(layout: &Self) -> HashMap<KeyCode, u8> {
+        match layout {
+            KeyboardLayout::Qwerty => {
+                // Standard CHIP-8 QWERTY layout
+                // 1 2 3 C
+                // 4 5 6 D
+                // 7 8 9 E
+                // A 0 B F
+                HashMap::from([
+                    (KeyCode::Char('1'), 0x1),
+                    (KeyCode::Char('2'), 0x2),
+                    (KeyCode::Char('3'), 0x3),
+                    (KeyCode::Char('4'), 0xC),
+                    (KeyCode::Char('q'), 0x4),
+                    (KeyCode::Char('w'), 0x5),
+                    (KeyCode::Char('e'), 0x6),
+                    (KeyCode::Char('r'), 0xD),
+                    (KeyCode::Char('s'), 0x8),
+                    (KeyCode::Char('d'), 0x9),
+                    (KeyCode::Char('f'), 0xE),
+                    (KeyCode::Char('z'), 0xA),
+                    (KeyCode::Char('x'), 0x0),
+                    (KeyCode::Char('c'), 0xB),
+                    (KeyCode::Char('v'), 0xF),
+                ])
+            }
+
+            KeyboardLayout::Natural => {
+                // More intuitive hex layout
+                // 1 2 3 4
+                // 5 6 7 8
+                // 9 A B C
+                // D E F 0
+                HashMap::from([
+                    (KeyCode::Char('1'), 0x1),
+                    (KeyCode::Char('2'), 0x2),
+                    (KeyCode::Char('3'), 0x3),
+                    (KeyCode::Char('4'), 0x4),
+                    (KeyCode::Char('q'), 0x5),
+                    (KeyCode::Char('w'), 0x6),
+                    (KeyCode::Char('e'), 0x7),
+                    (KeyCode::Char('r'), 0x8),
+                    (KeyCode::Char('a'), 0x9),
+                    (KeyCode::Char('s'), 0xA),
+                    (KeyCode::Char('d'), 0xB),
+                    (KeyCode::Char('f'), 0xC),
+                    (KeyCode::Char('z'), 0xD),
+                    (KeyCode::Char('x'), 0xE),
+                    (KeyCode::Char('c'), 0xF),
+                    (KeyCode::Char('v'), 0x0),
+                ])
+            }
+
+            KeyboardLayout::Sequential => {
+                // Sequential mapping across keyboard
+                // 1 2 3 4 5 6 7 8 9 0 Q W E R T Y
+                HashMap::from([
+                    (KeyCode::Char('1'), 0x1),
+                    (KeyCode::Char('2'), 0x2),
+                    (KeyCode::Char('3'), 0x3),
+                    (KeyCode::Char('4'), 0x4),
+                    (KeyCode::Char('5'), 0x5),
+                    (KeyCode::Char('6'), 0x6),
+                    (KeyCode::Char('7'), 0x7),
+                    (KeyCode::Char('8'), 0x8),
+                    (KeyCode::Char('9'), 0x9),
+                    (KeyCode::Char('0'), 0x0),
+                    (KeyCode::Char('q'), 0xA),
+                    (KeyCode::Char('w'), 0xB),
+                    (KeyCode::Char('e'), 0xC),
+                    (KeyCode::Char('r'), 0xD),
+                    (KeyCode::Char('t'), 0xE),
+                    (KeyCode::Char('y'), 0xF),
+                ])
+            }
+        }
+    }
+}
+
 /// Configuration for the keyboard input handler
 #[derive(Debug, Clone)]
 pub struct InputConfig {
@@ -47,105 +149,19 @@ impl Default for InputConfig {
 pub struct KeyEventHandler {
     config: InputConfig,
     key_mapping: HashMap<KeyCode, u8>,
-    chip8_keys: [bool; 16],
+    chip8_keys: Chip8KeyState,
     last_key_pressed: Option<u8>,
     special_key_callbacks: HashMap<KeyCode, KeyCallback>,
 }
 
 impl KeyEventHandler {
     pub fn new(config: InputConfig) -> Self {
-        let mut handler = Self {
+        Self {
             config: config.clone(),
-            key_mapping: HashMap::new(),
-            chip8_keys: [false; 16],
+            key_mapping: KeyboardLayout::get_key_map(&config.layout),
+            chip8_keys: Chip8KeyState::default(),
             last_key_pressed: None,
             special_key_callbacks: HashMap::new(),
-        };
-
-        handler.setup_key_mapping();
-        handler
-    }
-
-    /// Setup the key mapping based on the current layout
-    fn setup_key_mapping(&mut self) {
-        self.key_mapping.clear();
-
-        match self.config.layout {
-            KeyboardLayout::Qwerty => {
-                // Standard CHIP-8 QWERTY layout
-                // 1 2 3 C
-                // 4 5 6 D
-                // 7 8 9 E
-                // A 0 B F
-                self.key_mapping.insert(KeyCode::Char('1'), 0x1);
-                self.key_mapping.insert(KeyCode::Char('2'), 0x2);
-                self.key_mapping.insert(KeyCode::Char('3'), 0x3);
-                self.key_mapping.insert(KeyCode::Char('4'), 0xC);
-
-                self.key_mapping.insert(KeyCode::Char('q'), 0x4);
-                self.key_mapping.insert(KeyCode::Char('w'), 0x5);
-                self.key_mapping.insert(KeyCode::Char('e'), 0x6);
-                self.key_mapping.insert(KeyCode::Char('r'), 0xD);
-
-                self.key_mapping.insert(KeyCode::Char('a'), 0x7);
-                self.key_mapping.insert(KeyCode::Char('s'), 0x8);
-                self.key_mapping.insert(KeyCode::Char('d'), 0x9);
-                self.key_mapping.insert(KeyCode::Char('f'), 0xE);
-
-                self.key_mapping.insert(KeyCode::Char('z'), 0xA);
-                self.key_mapping.insert(KeyCode::Char('x'), 0x0);
-                self.key_mapping.insert(KeyCode::Char('c'), 0xB);
-                self.key_mapping.insert(KeyCode::Char('v'), 0xF);
-            }
-
-            KeyboardLayout::Natural => {
-                // More intuitive hex layout
-                // 1 2 3 4
-                // 5 6 7 8
-                // 9 A B C
-                // D E F 0
-                self.key_mapping.insert(KeyCode::Char('1'), 0x1);
-                self.key_mapping.insert(KeyCode::Char('2'), 0x2);
-                self.key_mapping.insert(KeyCode::Char('3'), 0x3);
-                self.key_mapping.insert(KeyCode::Char('4'), 0x4);
-
-                self.key_mapping.insert(KeyCode::Char('q'), 0x5);
-                self.key_mapping.insert(KeyCode::Char('w'), 0x6);
-                self.key_mapping.insert(KeyCode::Char('e'), 0x7);
-                self.key_mapping.insert(KeyCode::Char('r'), 0x8);
-
-                self.key_mapping.insert(KeyCode::Char('a'), 0x9);
-                self.key_mapping.insert(KeyCode::Char('s'), 0xA);
-                self.key_mapping.insert(KeyCode::Char('d'), 0xB);
-                self.key_mapping.insert(KeyCode::Char('f'), 0xC);
-
-                self.key_mapping.insert(KeyCode::Char('z'), 0xD);
-                self.key_mapping.insert(KeyCode::Char('x'), 0xE);
-                self.key_mapping.insert(KeyCode::Char('c'), 0xF);
-                self.key_mapping.insert(KeyCode::Char('v'), 0x0);
-            }
-
-            KeyboardLayout::Sequential => {
-                // Sequential mapping across keyboard
-                // 1 2 3 4 5 6 7 8 9 0 Q W E R T Y
-                self.key_mapping.insert(KeyCode::Char('1'), 0x1);
-                self.key_mapping.insert(KeyCode::Char('2'), 0x2);
-                self.key_mapping.insert(KeyCode::Char('3'), 0x3);
-                self.key_mapping.insert(KeyCode::Char('4'), 0x4);
-                self.key_mapping.insert(KeyCode::Char('5'), 0x5);
-                self.key_mapping.insert(KeyCode::Char('6'), 0x6);
-                self.key_mapping.insert(KeyCode::Char('7'), 0x7);
-                self.key_mapping.insert(KeyCode::Char('8'), 0x8);
-                self.key_mapping.insert(KeyCode::Char('9'), 0x9);
-                self.key_mapping.insert(KeyCode::Char('0'), 0x0);
-
-                self.key_mapping.insert(KeyCode::Char('q'), 0xA);
-                self.key_mapping.insert(KeyCode::Char('w'), 0xB);
-                self.key_mapping.insert(KeyCode::Char('e'), 0xC);
-                self.key_mapping.insert(KeyCode::Char('r'), 0xD);
-                self.key_mapping.insert(KeyCode::Char('t'), 0xE);
-                self.key_mapping.insert(KeyCode::Char('y'), 0xF);
-            }
         }
     }
 
@@ -180,10 +196,10 @@ impl KeyEventHandler {
         // Map physical key to CHIP-8 key
         if let Some(&chip8_key) = self.key_mapping.get(&key_event.code) {
             if pressed {
-                self.chip8_keys[chip8_key as usize] = true;
+                self.chip8_keys.press(chip8_key);
                 self.last_key_pressed = Some(chip8_key);
             } else {
-                self.chip8_keys[chip8_key as usize] = false;
+                self.chip8_keys.release(chip8_key);
             }
         }
     }
@@ -196,7 +212,7 @@ impl KeyEventHandler {
     /// Check if a specific CHIP-8 key is currently pressed
     pub fn is_key_pressed(&self, key: u8) -> bool {
         if key <= 0xF {
-            self.chip8_keys[key as usize]
+            self.chip8_keys.is_key_pressed(key)
         } else {
             false
         }

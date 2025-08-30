@@ -11,6 +11,9 @@ mod macros;
 mod primitive;
 mod screen;
 mod chip8;
+mod scheduler;
+mod hardware;
+mod util;
 
 use clap::Parser;
 use chip8::*;
@@ -39,7 +42,8 @@ struct Args {
     layout: String,
 }
 
-fn main() -> io::Result<()> {
+#[tokio::main]
+async fn main() -> io::Result<()> {
     panic::set_hook(Box::new(|panic_info| {
         let panic_msg = format!(
             "PANIC:
@@ -101,7 +105,7 @@ fn main() -> io::Result<()> {
         };
         let mut chip8 = Chip8::new(config, input_handler);
         chip8.load_rom(&bytes).expect("Could not load the ROM");
-        chip8.cycle();
+        chip8.cycle().await;
     }
 
     Ok(())

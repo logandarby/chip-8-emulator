@@ -1,3 +1,6 @@
 PANIC:
   panicked at src/main.rs:131:46:
 Could not decode instruction 0xF090 at PC location 80
+PANIC:
+  panicked at src/main.rs:66:41:
+Could not read file: Os { code: 2, kind: NotFound, message: "No such file or directory" }
