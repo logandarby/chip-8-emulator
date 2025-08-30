@@ -2,6 +2,8 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use std::collections::HashMap;
 use std::time::Duration;
 
+use crate::chip8::Chip8;
+
 // Struct to store and send key state to different components
 #[derive(Default, Clone, Copy)]
 pub struct Chip8KeyState {
@@ -22,7 +24,7 @@ impl Chip8KeyState {
 }
 
 /// Keyboard layout options for CHIP-8 input mapping
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, clap::ValueEnum)]
 pub enum KeyboardLayout {
     /// Maps number keys 1-9,0,A-F to CHIP-8 keys 1-9,0,A-F
     /// 1 2 3 4    =>    1 2 3 C
@@ -42,6 +44,17 @@ pub enum KeyboardLayout {
     /// 1 2 3 4 5 6 7 8 9 0 Q W E R T Y
     /// to CHIP-8: 1 2 3 4 5 6 7 8 9 0 A B C D E F
     Sequential,
+}
+
+impl std::fmt::Display for KeyboardLayout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use KeyboardLayout::*;
+        write!(f, "{}", match self {
+            Qwerty => "qwerty",
+            Sequential => "sequential",
+            Natural => "natural",
+        })  
+    }
 }
 
 impl KeyboardLayout {
@@ -135,7 +148,7 @@ impl Default for InputConfig {
     fn default() -> Self {
         Self {
             layout: KeyboardLayout::Qwerty,
-            poll_rate: Duration::from_millis(10),
+            poll_rate: Duration::from_millis(Chip8::INPUT_POLL_RATE_MS),
         }
     }
 }
@@ -166,7 +179,6 @@ pub enum Chip8InputEvent {
 pub struct KeyEventHandler {
     config: InputConfig,
     key_mapping: HashMap<KeyCode, u8>,
-    chip8_keys: Chip8KeyState,
 }
 
 impl KeyEventHandler {
@@ -174,7 +186,6 @@ impl KeyEventHandler {
         Self {
             config: config.clone(),
             key_mapping: KeyboardLayout::get_key_map(&config.layout),
-            chip8_keys: Chip8KeyState::default(),
         }
     }
 
@@ -230,28 +241,6 @@ impl KeyEventHandler {
                 command,
                 kind: pressed,
             })
-        }
-    }
-
-    /// Get a description of the current keyboard layout
-    pub fn get_layout_description(&self) -> String {
-        match self.config.layout {
-            KeyboardLayout::Qwerty => "QWERTY Layout:\n\
-                 1 2 3 4  =>  1 2 3 C\n\
-                 Q W E R  =>  4 5 6 D\n\
-                 A S D F  =>  7 8 9 E\n\
-                 Z X C V  =>  A 0 B F"
-                .to_string(),
-            KeyboardLayout::Natural => "Natural Layout:\n\
-                 1 2 3 4  =>  1 2 3 4\n\
-                 Q W E R  =>  5 6 7 8\n\
-                 A S D F  =>  9 A B C\n\
-                 Z X C V  =>  D E F 0"
-                .to_string(),
-            KeyboardLayout::Sequential => "Sequential Layout:\n\
-                 1 2 3 4 5 6 7 8 9 0 Q W E R T Y\n\
-                 1 2 3 4 5 6 7 8 9 0 A B C D E F"
-                .to_string(),
         }
     }
 }

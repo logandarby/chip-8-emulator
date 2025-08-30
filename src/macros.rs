@@ -12,6 +12,7 @@ macro_rules! validated_struct {
         $vis struct $name($type);
 
         impl $name {
+            #[allow(dead_code)]
             pub fn new(value: $type) -> Result<Self, String> {
                 let validator: fn($type) -> Result<(), String> = $validator;
                 validator(value)?;

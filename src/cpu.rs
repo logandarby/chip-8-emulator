@@ -1,5 +1,3 @@
-use std::cmp::min;
-
 use crate::primitive::*;
 
 pub struct CPU {
@@ -63,11 +61,6 @@ impl CPU {
         return Ok(());
     }
 
-    pub fn load_memory_slice(&self, start: usize, end: usize) -> &[u8] {
-        let end = min(end, self.memory.len());
-        return &self.memory[start..end];
-    }
-
     // Increment the Program Counter
     pub fn increment_pc(&mut self) {
         self.pc_r += Self::INSTRUCTION_SIZE_B;
@@ -94,19 +87,6 @@ impl CPU {
 
     pub fn set_index(&mut self, value: u16) {
         self.index_r = value;
-    }
-
-    pub fn get_debug_str(&self) -> String {
-        // Get registers in hex
-        let reg_str = (0..Self::REGISTER_COUNT)
-            .map(|i| format!("V{:X}={:02X}", i, self.gen_r[i]))
-            .collect::<Vec<_>>()
-            .join(" ");
-
-        format!(
-            "PC:{:04X} I:{:04X} Regs:[{}]",
-            self.pc_r, self.index_r, reg_str
-        )
     }
 
     pub fn dec_delay(&mut self) {

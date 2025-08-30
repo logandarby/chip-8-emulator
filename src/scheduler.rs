@@ -149,8 +149,7 @@ impl InputScheduler {
         clock_sender: mpsc::Sender<ClockControlMessage>,
     ) {
         loop {
-            let key_event = input.next_input_event().await;
-            match key_event {
+            match input.next_input_event().await {
                 Chip8InputEvent::Chip8KeyEvent { key, kind } => {
                     if kind == Chip8KeyEventKind::Press {
                         self.key_state.press(key);

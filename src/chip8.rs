@@ -6,18 +6,28 @@ use crate::input::KeyEventHandler;
 use crate::primitive::*;
 use crate::scheduler::*;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, clap::ValueEnum)]
 pub enum Chip8Version {
     COSMAC,
     CHIP48,
     SUPERCHIP,
 }
 
+impl std::fmt::Display for Chip8Version {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use Chip8Version::*;
+        write!(f, "{}", match self {
+            COSMAC => "cosmac",
+            CHIP48 => "chip48",
+            SUPERCHIP => "superchip",
+        })
+    }
+}
+
 #[derive(Clone)]
 pub struct Chip8Config {
     pub version: Chip8Version,
     pub debug: bool,
-    pub step_mode: bool,
 }
 
 pub struct Chip8 {

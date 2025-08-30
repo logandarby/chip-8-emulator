@@ -1,7 +1,7 @@
 use std::{
     fs,
     io::{self, Write},
-    panic,
+    panic::{self, PanicHookInfo},
 };
 
 mod chip8;
@@ -31,81 +31,66 @@ struct Args {
     #[arg(long, action = clap::ArgAction::SetTrue, help = "Enable debug mode showing CPU state each cycle")]
     debug: bool,
 
-    #[arg(long, action = clap::ArgAction::SetTrue, help = "Enable step mode - pause after each instruction (requires space/enter to continue)")]
-    step: bool,
+    #[arg(
+        long,
+        default_value_t = input::KeyboardLayout::Qwerty,
+        help = "Keyboard layout: qwerty, natural, or sequential"
+    )]
+    layout: input::KeyboardLayout,
 
     #[arg(
         long,
-        default_value = "qwerty",
-        help = "Keyboard layout: qwerty, natural, or sequential"
+        default_value_t = Chip8Version::COSMAC,
+        help = "CHIP-8 version: cosmac, chip48, or superchip"
     )]
-    layout: String,
+    version: Chip8Version,
 }
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    panic::set_hook(Box::new(|panic_info| {
-        let panic_msg = format!(
-            "PANIC:
-  {}\n",
-            panic_info
-        );
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("panic.log")
-        {
-            let _ = file.write_all(panic_msg.as_bytes());
-        }
-        // Also print to stderr if possible
-        eprintln!("{}", panic_msg);
-    }));
+    panic::set_hook(Box::new(panic_handler));
 
     let args = Args::parse();
-    println!("Reading file {}", args.rom_file);
-    let bytes = fs::read(args.rom_file).expect("Could not read file");
+    let bytes = fs::read(args.rom_file)?;
 
     if args.dump_inst {
         Chip8::dump_inst(&bytes);
-    } else {
-        // Parse keyboard layout
-        let layout = match args.layout.to_lowercase().as_str() {
-            "qwerty" => input::KeyboardLayout::Qwerty,
-            "natural" => input::KeyboardLayout::Natural,
-            "sequential" => input::KeyboardLayout::Sequential,
-            _ => {
-                eprintln!("Invalid layout '{}'. Using qwerty.", args.layout);
-                input::KeyboardLayout::Qwerty
-            }
-        };
-
-        // Create input configuration
-        let input_config = input::InputConfig {
-            layout,
-            ..Default::default()
-        };
-
-        // Create input handler
-        let input_handler = input::KeyEventHandler::new(input_config);
-
-        // Print layout info
-        if args.debug {
-            println!(
-                "Using keyboard layout:\n{}",
-                input_handler.get_layout_description()
-            );
-        }
-
-        // Create emulator
-        let config = Chip8Config {
-            version: Chip8Version::COSMAC,
-            debug: args.debug,
-            step_mode: args.step,
-        };
-        let mut chip8 = Chip8::new(config, input_handler);
-        chip8.load_rom(&bytes).expect("Could not load the ROM");
-        chip8.cycle().await;
+        return Ok(());
     }
+    // Create input configuration
+    let input_config = input::InputConfig {
+        layout: args.layout,
+        ..Default::default()
+    };
+
+    // Create input handler
+    let input_handler = input::KeyEventHandler::new(input_config);
+
+    // Create emulator
+    let config = Chip8Config {
+        version: args.version,
+        debug: args.debug,
+    };
+    let mut chip8 = Chip8::new(config, input_handler);
+    chip8.load_rom(&bytes).expect("Could not load the ROM");
+    chip8.cycle().await;
 
     Ok(())
+}
+
+fn panic_handler(panic_info: &PanicHookInfo) {
+    let panic_msg = format!(
+        "PANIC:
+  {}\n",
+        panic_info
+    );
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("panic.log")
+    {
+        let _ = file.write_all(panic_msg.as_bytes());
+    }
+    // Also print to stderr if possible
+    eprintln!("{}", panic_msg);
 }

@@ -49,30 +49,6 @@ impl Screen {
         self.pixels.fill(false);
     }
 
-    pub fn set_debug_info(&mut self, info: String) {
-        self.debug_info = info;
-    }
-
-    pub fn clear_debug_info(&mut self) {
-        self.debug_info.clear();
-    }
-
-    pub fn set_cpu_debug_info(&mut self, info: String) {
-        self.cpu_debug_info = info;
-    }
-
-    pub fn set_current_instruction_debug(&mut self, info: String) {
-        self.current_instruction_debug = info;
-    }
-
-    pub fn set_step_mode_prompt(&mut self, prompt: String) {
-        self.step_mode_prompt = prompt;
-    }
-
-    pub fn clear_step_mode_prompt(&mut self) {
-        self.step_mode_prompt.clear();
-    }
-
     // Draws to the console
     pub fn flush(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         use crossterm::{cursor::*, queue, style::*};
