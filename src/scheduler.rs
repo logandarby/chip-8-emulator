@@ -9,7 +9,7 @@ use crate::{
     util,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum PlaybackMode {
     Running,
     Paused,
@@ -27,10 +27,20 @@ pub enum HardwareMessage {
     DecrementTimers,
     FlushScreen,
     UpdateDebugInfo,
+    CheckSoundTimer,
+}
+
+pub enum SoundMessage {
+    TimerState(u8),
+    PlaybackMode(PlaybackMode),
 }
 
 impl HardwareScheduler {
-    pub async fn run(hardware: &mut Hardware, mut inbox: mpsc::Receiver<HardwareMessage>) {
+    pub async fn run(
+        hardware: &mut Hardware,
+        mut inbox: mpsc::Receiver<HardwareMessage>,
+        sound_sender: Option<mpsc::Sender<SoundMessage>>,
+    ) {
         while let Some(message) = inbox.recv().await {
             use HardwareMessage::*;
             match message {
@@ -60,6 +70,13 @@ impl HardwareScheduler {
                 UpdateDebugInfo => {
                     hardware.update_debug_info();
                 }
+                CheckSoundTimer => {
+                    // Send current sound timer state to sound scheduler
+                    if let Some(ref sender) = sound_sender {
+                        let timer_value = hardware.cpu.get_sound_timer();
+                        let _ = sender.send(SoundMessage::TimerState(timer_value)).await;
+                    }
+                }
             }
         }
     }
@@ -83,20 +100,24 @@ impl ClockSheduler {
         hardware_sender: mpsc::Sender<HardwareMessage>,
         initial_is_running: bool,
         playback_state_sender: Option<mpsc::Sender<PlaybackMode>>,
+        sound_sender: Option<mpsc::Sender<SoundMessage>>,
     ) {
         let mut exec_interval = interval(util::hertz(self.hz));
         let mut is_running = initial_is_running;
         let mut single_step_pending = false;
 
         // Send initial state
+        let initial_mode = if is_running {
+            PlaybackMode::Running
+        } else {
+            PlaybackMode::Paused
+        };
+
         if let Some(ref sender) = playback_state_sender {
-            let _ = sender
-                .send(if is_running {
-                    PlaybackMode::Running
-                } else {
-                    PlaybackMode::Paused
-                })
-                .await;
+            let _ = sender.send(initial_mode.clone()).await;
+        }
+        if let Some(ref sender) = sound_sender {
+            let _ = sender.send(SoundMessage::PlaybackMode(initial_mode)).await;
         }
         loop {
             select! {
@@ -108,8 +129,12 @@ impl ClockSheduler {
                                exec_interval.reset();
                            }
                            // Update playback state
+                           let mode = if is_running { PlaybackMode::Running } else { PlaybackMode::Paused };
                            if let Some(ref sender) = playback_state_sender {
-                               let _ = sender.send(if is_running { PlaybackMode::Running } else { PlaybackMode::Paused }).await;
+                               let _ = sender.send(mode.clone()).await;
+                           }
+                           if let Some(ref sender) = sound_sender {
+                               let _ = sender.send(SoundMessage::PlaybackMode(mode)).await;
                            }
                        },
                         Some(ClockControlMessage::Shutdown) => break,
@@ -118,6 +143,9 @@ impl ClockSheduler {
                             // Update playback state to show stepping
                             if let Some(ref sender) = playback_state_sender {
                                 let _ = sender.send(PlaybackMode::Stepping).await;
+                            }
+                            if let Some(ref sender) = sound_sender {
+                                let _ = sender.send(SoundMessage::PlaybackMode(PlaybackMode::Stepping)).await;
                             }
                         },
                         None => break,
@@ -161,6 +189,11 @@ struct ScreenScheduler {
     pub hz: f64,
 }
 
+// Manages sound playback using rodio
+pub struct SoundScheduler {
+    pub hz: f64, // How often to check sound timer state
+}
+
 impl ScreenScheduler {
     pub async fn run(&self, hardware_sender: mpsc::Sender<HardwareMessage>, debug_enabled: bool) {
         let mut exec_interval = interval(util::hertz(self.hz));
@@ -184,6 +217,88 @@ impl ScreenScheduler {
                 .is_err()
             {
                 break;
+            }
+        }
+    }
+}
+
+impl SoundScheduler {
+    pub async fn run(
+        &self,
+        mut inbox: mpsc::Receiver<SoundMessage>,
+        hardware_sender: mpsc::Sender<HardwareMessage>,
+    ) {
+        use rodio::source::SineWave;
+        use rodio::{OutputStreamBuilder, Sink, Source};
+        use std::time::Duration;
+
+        // Initialize rodio audio system
+        let stream_handle = match OutputStreamBuilder::open_default_stream() {
+            Ok(handle) => handle,
+            Err(_) => {
+                // Audio system not available, run silently
+                return;
+            }
+        };
+
+        let sink = Sink::connect_new(&stream_handle.mixer());
+
+        let mut timer_check_interval = interval(util::hertz(self.hz));
+        let mut current_timer_value = 0u8;
+        let mut is_playing = false;
+        let mut playback_mode = PlaybackMode::Running;
+
+        // Create a simple beep tone (sine wave at ~440Hz)
+        let create_beep = || {
+            SineWave::new(440.0)
+                .take_duration(Duration::from_millis(100))
+                .repeat_infinite()
+                .amplify(0.1)
+        };
+
+        loop {
+            select! {
+                message = inbox.recv() => {
+                    match message {
+                                                Some(SoundMessage::TimerState(timer_value)) => {
+                            current_timer_value = timer_value;
+
+                            // Start playing if timer > 0 and not currently playing
+                            if timer_value > 0 && !is_playing && playback_mode == PlaybackMode::Running {
+                                sink.append(create_beep());
+                                sink.play();
+                                is_playing = true;
+                            }
+                            // Stop playing if timer == 0 and currently playing
+                            else if timer_value == 0 && is_playing {
+                                sink.stop();
+                                is_playing = false;
+                            }
+                        },
+                        Some(SoundMessage::PlaybackMode(mode)) => {
+                            playback_mode = mode.clone();
+                            match mode {
+                                PlaybackMode::Running => {
+                                    if current_timer_value > 0 && !is_playing {
+                                        sink.append(create_beep());
+                                        sink.play();
+                                        is_playing = true;
+                                    }
+                                },
+                                PlaybackMode::Paused | PlaybackMode::Stepping => {
+                                    if is_playing {
+                                        sink.pause();
+                                    }
+                                }
+                            }
+                        },
+                        None => break,
+                    }
+                },
+                _ = timer_check_interval.tick() => {
+                    // Periodically request sound timer state from hardware
+                    let _ = hardware_sender.send(HardwareMessage::CheckSoundTimer).await;
+                }
             }
         }
     }
@@ -258,6 +373,7 @@ impl Chip8Orchaestrator {
         let (hard_send, hard_recv) = mpsc::channel::<HardwareMessage>(100);
         let (clock_send, clock_recv) = mpsc::channel::<ClockControlMessage>(100);
         let (playback_send, playback_recv) = mpsc::channel::<PlaybackMode>(100);
+        let (sound_send, sound_recv) = mpsc::channel::<SoundMessage>(100);
 
         let timer_scheduler = TimerScheduler {
             hz: Chip8::TIMER_HZ,
@@ -268,6 +384,9 @@ impl Chip8Orchaestrator {
         let screen_scheulder = ScreenScheduler {
             hz: Chip8::SCREEN_HZ,
         };
+        let sound_scheduler = SoundScheduler {
+            hz: Chip8::TIMER_HZ,
+        };
         let mut input_scheduler = InputScheduler::new();
 
         // Set up hardware to receive playback state updates
@@ -275,9 +394,16 @@ impl Chip8Orchaestrator {
 
         select! {
             _ = timer_scheduler.run(hard_send.clone()) => {},
-            _ = clock_scheulder.run(clock_recv, hard_send.clone(), !chip8.config.debug, if chip8.config.debug { Some(playback_send) } else { None }) => {},
+            _ = clock_scheulder.run(
+                clock_recv,
+                hard_send.clone(),
+                !chip8.config.debug,
+                if chip8.config.debug { Some(playback_send) } else { None },
+                Some(sound_send.clone())
+            ) => {},
             _ = screen_scheulder.run(hard_send.clone(), chip8.config.debug) => {},
-            _ = HardwareScheduler::run(&mut chip8.hardware, hard_recv) => {},
+            _ = sound_scheduler.run(sound_recv, hard_send.clone()) => {},
+            _ = HardwareScheduler::run(&mut chip8.hardware, hard_recv, Some(sound_send.clone())) => {},
             _ = input_scheduler.run(&chip8.input, hard_send, clock_send) => {},
         }
     }
