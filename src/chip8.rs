@@ -16,11 +16,15 @@ pub enum Chip8Version {
 impl std::fmt::Display for Chip8Version {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use Chip8Version::*;
-        write!(f, "{}", match self {
-            COSMAC => "cosmac",
-            CHIP48 => "chip48",
-            SUPERCHIP => "superchip",
-        })
+        write!(
+            f,
+            "{}",
+            match self {
+                COSMAC => "cosmac",
+                CHIP48 => "chip48",
+                SUPERCHIP => "superchip",
+            }
+        )
     }
 }
 

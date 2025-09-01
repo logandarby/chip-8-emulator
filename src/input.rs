@@ -49,11 +49,15 @@ pub enum KeyboardLayout {
 impl std::fmt::Display for KeyboardLayout {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use KeyboardLayout::*;
-        write!(f, "{}", match self {
-            Qwerty => "qwerty",
-            Sequential => "sequential",
-            Natural => "natural",
-        })  
+        write!(
+            f,
+            "{}",
+            match self {
+                Qwerty => "qwerty",
+                Sequential => "sequential",
+                Natural => "natural",
+            }
+        )
     }
 }
 
@@ -75,6 +79,7 @@ impl KeyboardLayout {
                     (KeyCode::Char('w'), 0x5),
                     (KeyCode::Char('e'), 0x6),
                     (KeyCode::Char('r'), 0xD),
+                    (KeyCode::Char('a'), 0x7),
                     (KeyCode::Char('s'), 0x8),
                     (KeyCode::Char('d'), 0x9),
                     (KeyCode::Char('f'), 0xE),
@@ -153,27 +158,32 @@ impl Default for InputConfig {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 pub enum Chip8KeyEventKind {
     Press,
     Release,
 }
 
+#[derive(Debug)]
 pub enum Chip8Command {
     Quit,
     DebugStep,
     DebugPlayPause,
 }
 
+#[derive(Debug)]
+pub struct Chip8KeyEvent {
+    pub key: u8,
+    pub kind: Chip8KeyEventKind,
+}
+
+#[derive(Debug)]
 pub enum Chip8InputEvent {
     CommandEvent {
         command: Chip8Command,
         kind: Chip8KeyEventKind,
     },
-    Chip8KeyEvent {
-        key: u8,
-        kind: Chip8KeyEventKind,
-    },
+    Chip8KeyEvent(Chip8KeyEvent),
 }
 
 pub struct KeyEventHandler {
@@ -191,7 +201,7 @@ impl KeyEventHandler {
 
     /// Update the key states by polling crossterm events
     pub async fn next_input_event(&self) -> Chip8InputEvent {
-        let rate = self.config.poll_rate.clone();
+        let rate = self.config.poll_rate;
         loop {
             match tokio::task::spawn_blocking(move || {
                 event::poll(rate)
@@ -204,9 +214,9 @@ impl KeyEventHandler {
                 Ok(Some(Event::Key(key_event))) => {
                     if let Some(key_event) = self.handle_key_event(key_event) {
                         return key_event;
-                    } else {
-                        continue;
                     }
+                    tokio::time::sleep(rate).await;
+                    continue;
                 }
                 _ => {
                     tokio::time::sleep(rate).await;
@@ -225,10 +235,10 @@ impl KeyEventHandler {
 
         // Map physical key to CHIP-8 key
         if let Some(&chip8_key) = self.key_mapping.get(&key_event.code) {
-            Some(Chip8InputEvent::Chip8KeyEvent {
+            Some(Chip8InputEvent::Chip8KeyEvent(Chip8KeyEvent {
                 key: chip8_key,
                 kind: pressed,
-            })
+            }))
         // Physical key for debug/quit commands
         } else {
             let command = match key_event.code {

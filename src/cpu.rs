@@ -8,6 +8,7 @@ pub struct CPU {
     stack: Vec<u16>,                   // Stack
     delay_timer: u8,                   // Delay Timer
     sound_timer: u8,                   // Sound Timer
+    waiting_for_key: Option<Register>, // Track if CPU is waiting for key input
 }
 
 impl CPU {
@@ -24,6 +25,7 @@ impl CPU {
             delay_timer: 0,
             sound_timer: 0,
             pc_r: 0,
+            waiting_for_key: None,
         };
     }
 
@@ -171,5 +173,18 @@ impl CPU {
     pub fn store_registers_cosmac(&mut self, up_to_reg: &Register) {
         self.store_registers(up_to_reg);
         self.index_r += up_to_reg.get() as u16 + 1;
+    }
+
+    // Key waiting state management
+    pub fn is_waiting_for_key(&self) -> bool {
+        self.waiting_for_key.is_some()
+    }
+
+    pub fn start_waiting_for_key(&mut self, reg: Register) {
+        self.waiting_for_key = Some(reg);
+    }
+
+    pub fn stop_waiting_for_key(&mut self) -> Option<Register> {
+        self.waiting_for_key.take()
     }
 }

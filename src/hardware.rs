@@ -1,6 +1,6 @@
 use crate::chip8::{Chip8, Chip8Version};
 use crate::cpu::CPU;
-use crate::input::Chip8KeyState;
+use crate::input::{Chip8KeyEventKind, Chip8KeyState};
 use crate::primitive::*;
 use crate::screen::Screen;
 
@@ -31,7 +31,30 @@ impl Hardware {
         self.key_state = key_state.clone();
     }
 
-    pub fn execute_instruction(&mut self, inst: &Instruction) {
+    pub fn handle_key_when_waiting(&mut self, key: u8, kind: Chip8KeyEventKind) -> bool {
+        if let Some(reg) = self.cpu.stop_waiting_for_key() {
+            let expected_kind = if self.config.version == Chip8Version::COSMAC {
+                Chip8KeyEventKind::Release
+            } else {
+                Chip8KeyEventKind::Press
+            };
+            if kind == expected_kind {
+                self.cpu.register_set(&reg, key);
+                self.cpu.increment_pc(); // Now we can move to the next instruction
+                return true;
+            } else {
+                // Wrong event type, continue waiting
+                self.cpu.start_waiting_for_key(reg);
+            }
+        }
+        false
+    }
+
+    pub fn is_waiting_for_key(&self) -> bool {
+        self.cpu.is_waiting_for_key()
+    }
+
+    pub async fn execute_instruction(&mut self, inst: &Instruction) {
         use Instruction::*;
 
         match inst {
@@ -111,17 +134,9 @@ impl Hardware {
                 }
             }
             GetKey(reg) => {
-                // TODO: On COSMAC, should only be registered when pressed THEN released
-                todo!();
-                // loop {
-                //     self.input.update().unwrap();
-                //     let key = self.input.get_pressed_key();
-                //     if let Some(key) = key {
-                //         self.cpu.register_set(reg, key);
-                //         break;
-                //     };
-                //     thread::sleep(Self::INPUT_POLL_RATE);
-                // }
+                // Set CPU to waiting state and don't increment PC
+                self.cpu.start_waiting_for_key(*reg);
+                return;
             }
             Random(reg, value) => {
                 let random: u8 = rand::random();

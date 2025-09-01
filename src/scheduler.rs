@@ -2,7 +2,10 @@ use crate::{
     chip8::Chip8,
     decoder::Decoder,
     hardware::Hardware,
-    input::{Chip8Command, Chip8InputEvent, Chip8KeyEventKind, Chip8KeyState, KeyEventHandler},
+    input::{
+        Chip8Command, Chip8InputEvent, Chip8KeyEvent, Chip8KeyEventKind, Chip8KeyState,
+        KeyEventHandler,
+    },
     util,
 };
 use tokio::{select, sync::mpsc, time::interval};
@@ -13,6 +16,7 @@ pub struct HardwareScheduler;
 pub enum HardwareMessage {
     ExecuteInstruction,
     UpdateKeyState(Chip8KeyState),
+    HandleKeyEvent(Chip8KeyEvent),
     DecrementTimers,
     FlushScreen,
 }
@@ -23,8 +27,17 @@ impl HardwareScheduler {
             use HardwareMessage::*;
             match message {
                 ExecuteInstruction => {
-                    let raw = hardware.cpu.fetch_current_instruction();
-                    hardware.execute_instruction(&Decoder::decode(&raw).unwrap());
+                    // Skip execution if CPU is waiting for key input
+                    if !hardware.is_waiting_for_key() {
+                        let raw = hardware.cpu.fetch_current_instruction();
+                        hardware
+                            .execute_instruction(&Decoder::decode(&raw).unwrap())
+                            .await;
+                    }
+                }
+                HandleKeyEvent(Chip8KeyEvent { key, kind }) => {
+                    // Try to handle key event if CPU is waiting
+                    hardware.handle_key_when_waiting(key, kind);
                 }
                 DecrementTimers => {
                     hardware.cpu.dec_delay();
@@ -149,13 +162,22 @@ impl InputScheduler {
         clock_sender: mpsc::Sender<ClockControlMessage>,
     ) {
         loop {
-            match input.next_input_event().await {
-                Chip8InputEvent::Chip8KeyEvent { key, kind } => {
+            let input_event = input.next_input_event().await;
+            match input_event {
+                Chip8InputEvent::Chip8KeyEvent(Chip8KeyEvent { key, kind }) => {
+                    // Update local key state
                     if kind == Chip8KeyEventKind::Press {
                         self.key_state.press(key);
                     } else {
                         self.key_state.release(key);
                     }
+
+                    // Send key event to hardware (for GetKey instruction handling)
+                    let _ = hardware_sender
+                        .send(HardwareMessage::HandleKeyEvent(Chip8KeyEvent { key, kind }))
+                        .await;
+
+                    // Update hardware key state (for SkipKeyPress instructions)
                     let _ = hardware_sender
                         .send(HardwareMessage::UpdateKeyState(self.key_state.clone()))
                         .await;
@@ -207,7 +229,7 @@ impl Chip8Orchaestrator {
             _ = clock_scheulder.run(clock_recv, hard_send.clone(), !chip8.config.debug) => {},
             _ = screen_scheulder.run(hard_send.clone()) => {},
             _ = HardwareScheduler::run(&mut chip8.hardware, hard_recv) => {},
-            _ = input_scheduler.run(&mut chip8.input, hard_send, clock_send) => {},
+            _ = input_scheduler.run(&chip8.input, hard_send, clock_send) => {},
         }
     }
 }

@@ -9,6 +9,7 @@ macro_rules! validated_struct {
         }
     ) => {
         $(#[$attr])*
+        #[derive(Clone, Copy, Debug)]
         $vis struct $name($type);
 
         impl $name {
