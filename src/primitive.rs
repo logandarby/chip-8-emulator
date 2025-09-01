@@ -26,6 +26,7 @@ impl Display for Address {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct Immediate8(u8);
 impl Immediate8 {
     pub fn get(&self) -> u8 {
@@ -57,7 +58,7 @@ fn is_4_bit(value: u8) -> Result<(), String> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RawInstruction(u16);
 
 /*
@@ -109,6 +110,7 @@ impl Display for RawInstruction {
     }
 }
 
+#[derive(Clone, Debug)]
 pub enum RegOperation {
     Set,
     OR,
@@ -138,7 +140,7 @@ impl Display for RegOperation {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum SkipIf {
     Eq,
     NotEq,
@@ -150,6 +152,7 @@ impl Display for SkipIf {
     }
 }
 
+#[derive(Clone, Debug)]
 pub enum Instruction {
     // Draw
     ClearScreen,

@@ -5,7 +5,7 @@ use std::time::Duration;
 use crate::chip8::Chip8;
 
 // Struct to store and send key state to different components
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, Debug)]
 pub struct Chip8KeyState {
     keys_pressed: [bool; Self::TOTAL_KEYS],
 }
@@ -20,6 +20,19 @@ impl Chip8KeyState {
     }
     pub fn is_key_pressed(&self, key: u8) -> bool {
         self.keys_pressed[key as usize]
+    }
+
+    pub fn format_pressed_keys(&self) -> String {
+        let pressed_keys: Vec<String> = (0..Self::TOTAL_KEYS)
+            .filter(|&i| self.keys_pressed[i])
+            .map(|i| format!("{:X}", i))
+            .collect();
+
+        if pressed_keys.is_empty() {
+            "None".to_string()
+        } else {
+            pressed_keys.join(",")
+        }
     }
 }
 

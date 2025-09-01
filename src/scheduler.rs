@@ -8,6 +8,13 @@ use crate::{
     },
     util,
 };
+
+#[derive(Clone, Debug)]
+pub enum PlaybackMode {
+    Running,
+    Paused,
+    Stepping,
+}
 use tokio::{select, sync::mpsc, time::interval};
 
 // Manages messages to the hardware
@@ -19,6 +26,7 @@ pub enum HardwareMessage {
     HandleKeyEvent(Chip8KeyEvent),
     DecrementTimers,
     FlushScreen,
+    UpdateDebugInfo,
 }
 
 impl HardwareScheduler {
@@ -49,6 +57,9 @@ impl HardwareScheduler {
                 FlushScreen => {
                     hardware.screen.flush().unwrap();
                 }
+                UpdateDebugInfo => {
+                    hardware.update_debug_info();
+                }
             }
         }
     }
@@ -71,10 +82,22 @@ impl ClockSheduler {
         mut inbox: mpsc::Receiver<ClockControlMessage>,
         hardware_sender: mpsc::Sender<HardwareMessage>,
         initial_is_running: bool,
+        playback_state_sender: Option<mpsc::Sender<PlaybackMode>>,
     ) {
         let mut exec_interval = interval(util::hertz(self.hz));
         let mut is_running = initial_is_running;
         let mut single_step_pending = false;
+
+        // Send initial state
+        if let Some(ref sender) = playback_state_sender {
+            let _ = sender
+                .send(if is_running {
+                    PlaybackMode::Running
+                } else {
+                    PlaybackMode::Paused
+                })
+                .await;
+        }
         loop {
             select! {
                 message = inbox.recv() => {
@@ -84,9 +107,19 @@ impl ClockSheduler {
                            if is_running {
                                exec_interval.reset();
                            }
+                           // Update playback state
+                           if let Some(ref sender) = playback_state_sender {
+                               let _ = sender.send(if is_running { PlaybackMode::Running } else { PlaybackMode::Paused }).await;
+                           }
                        },
                         Some(ClockControlMessage::Shutdown) => break,
-                        Some(ClockControlMessage::Step) => single_step_pending = true,
+                        Some(ClockControlMessage::Step) => {
+                            single_step_pending = true;
+                            // Update playback state to show stepping
+                            if let Some(ref sender) = playback_state_sender {
+                                let _ = sender.send(PlaybackMode::Stepping).await;
+                            }
+                        },
                         None => break,
                     }
                 },
@@ -129,10 +162,22 @@ struct ScreenScheduler {
 }
 
 impl ScreenScheduler {
-    pub async fn run(&self, hardware_sender: mpsc::Sender<HardwareMessage>) {
+    pub async fn run(&self, hardware_sender: mpsc::Sender<HardwareMessage>, debug_enabled: bool) {
         let mut exec_interval = interval(util::hertz(self.hz));
         loop {
             exec_interval.tick().await;
+
+            // Update debug info if enabled
+            if debug_enabled {
+                if hardware_sender
+                    .send(HardwareMessage::UpdateDebugInfo)
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+
             if hardware_sender
                 .send(HardwareMessage::FlushScreen)
                 .await
@@ -212,6 +257,7 @@ impl Chip8Orchaestrator {
         // Comm channels
         let (hard_send, hard_recv) = mpsc::channel::<HardwareMessage>(100);
         let (clock_send, clock_recv) = mpsc::channel::<ClockControlMessage>(100);
+        let (playback_send, playback_recv) = mpsc::channel::<PlaybackMode>(100);
 
         let timer_scheduler = TimerScheduler {
             hz: Chip8::TIMER_HZ,
@@ -224,10 +270,13 @@ impl Chip8Orchaestrator {
         };
         let mut input_scheduler = InputScheduler::new();
 
+        // Set up hardware to receive playback state updates
+        chip8.hardware.set_playback_receiver(playback_recv);
+
         select! {
             _ = timer_scheduler.run(hard_send.clone()) => {},
-            _ = clock_scheulder.run(clock_recv, hard_send.clone(), !chip8.config.debug) => {},
-            _ = screen_scheulder.run(hard_send.clone()) => {},
+            _ = clock_scheulder.run(clock_recv, hard_send.clone(), !chip8.config.debug, if chip8.config.debug { Some(playback_send) } else { None }) => {},
+            _ = screen_scheulder.run(hard_send.clone(), chip8.config.debug) => {},
             _ = HardwareScheduler::run(&mut chip8.hardware, hard_recv) => {},
             _ = input_scheduler.run(&chip8.input, hard_send, clock_send) => {},
         }

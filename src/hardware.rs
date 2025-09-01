@@ -2,7 +2,8 @@ use crate::chip8::{Chip8, Chip8Version};
 use crate::cpu::CPU;
 use crate::input::{Chip8KeyEventKind, Chip8KeyState};
 use crate::primitive::*;
-use crate::screen::Screen;
+use crate::scheduler::PlaybackMode;
+use crate::screen::{DebugInfo, Screen};
 
 #[derive(Debug, Clone)]
 pub struct HardwareExecutionConfig {
@@ -15,6 +16,8 @@ pub struct Hardware {
     pub screen: Screen,
     key_state: Chip8KeyState,
     config: HardwareExecutionConfig,
+    playback_state: PlaybackMode,
+    playback_receiver: Option<tokio::sync::mpsc::Receiver<PlaybackMode>>,
 }
 
 impl Hardware {
@@ -24,7 +27,13 @@ impl Hardware {
             screen: Screen::new(),
             key_state: Chip8KeyState::default(),
             config,
+            playback_state: PlaybackMode::Running,
+            playback_receiver: None,
         }
+    }
+
+    pub fn set_playback_receiver(&mut self, receiver: tokio::sync::mpsc::Receiver<PlaybackMode>) {
+        self.playback_receiver = Some(receiver);
     }
 
     pub fn set_key_state(&mut self, key_state: &Chip8KeyState) {
@@ -243,6 +252,38 @@ impl Hardware {
                     }
                 }
             }
+        }
+    }
+
+    pub fn update_debug_info(&mut self) {
+        // Check for playback state updates
+        if let Some(ref mut receiver) = self.playback_receiver {
+            while let Ok(state) = receiver.try_recv() {
+                self.playback_state = state;
+            }
+        }
+
+        let debug_info = self.get_debug_info();
+        self.screen.set_debug_info(debug_info);
+    }
+
+    pub fn get_debug_info(&self) -> DebugInfo {
+        let raw_inst = self.cpu.fetch_current_instruction();
+        let decoded_inst = crate::decoder::Decoder::decode(&raw_inst)
+            .unwrap_or(crate::primitive::Instruction::Invalid);
+
+        let registers = self.cpu.all_register_val();
+
+        DebugInfo {
+            current_pc: self.cpu.get_pc(),
+            raw_instruction: raw_inst,
+            decoded_instruction: decoded_inst,
+            index_register: self.cpu.get_index(),
+            delay_timer: self.cpu.get_delay_timer(),
+            sound_timer: self.cpu.get_sound_timer(),
+            registers,
+            key_state: self.key_state,
+            playback_mode: self.playback_state.clone(),
         }
     }
 }

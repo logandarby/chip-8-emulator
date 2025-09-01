@@ -7,12 +7,28 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen},
 };
 
+use crate::{
+    input::Chip8KeyState,
+    primitive::{Instruction, RawInstruction},
+    scheduler::PlaybackMode,
+};
+
+#[derive(Debug, Clone)]
+pub struct DebugInfo {
+    pub current_pc: u16,
+    pub raw_instruction: RawInstruction,
+    pub decoded_instruction: Instruction,
+    pub index_register: u16,
+    pub delay_timer: u8,
+    pub sound_timer: u8,
+    pub registers: [u8; 16],
+    pub key_state: Chip8KeyState,
+    pub playback_mode: PlaybackMode,
+}
+
 pub struct Screen {
     pixels: [bool; Self::N_PIXELS as usize],
-    debug_info: String,
-    cpu_debug_info: String,
-    current_instruction_debug: String,
-    step_mode_prompt: String,
+    debug_info: Option<DebugInfo>,
 }
 
 impl Screen {
@@ -24,10 +40,7 @@ impl Screen {
         execute!(std::io::stdout(), EnterAlternateScreen, Hide).expect("Could not create terminal");
         Self {
             pixels: [false; Self::N_PIXELS as usize],
-            debug_info: String::new(),
-            cpu_debug_info: String::new(),
-            current_instruction_debug: String::new(),
-            step_mode_prompt: String::new(),
+            debug_info: None,
         }
     }
 
@@ -49,6 +62,10 @@ impl Screen {
         self.pixels.fill(false);
     }
 
+    pub fn set_debug_info(&mut self, debug_info: DebugInfo) {
+        self.debug_info = Some(debug_info);
+    }
+
     // Draws to the console
     pub fn flush(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         use crossterm::{cursor::*, queue, style::*};
@@ -61,10 +78,7 @@ impl Screen {
         let offset_x = (term_width.saturating_sub(display_width)) / 2;
 
         // Check if we have any debug info to display
-        let has_debug_info = !self.debug_info.is_empty()
-            || !self.cpu_debug_info.is_empty()
-            || !self.current_instruction_debug.is_empty()
-            || !self.step_mode_prompt.is_empty();
+        let has_debug_info = self.debug_info.is_some();
 
         // Reserve space at bottom
         let bottom_reserve = if has_debug_info {
@@ -106,56 +120,131 @@ impl Screen {
         }
 
         // Add debug info right after the display (no title when debugging)
-        let mut debug_line = offset_y + display_height + 1;
-        if !self.debug_info.is_empty() {
-            queue!(
-                stdout(),
-                MoveTo(offset_x, debug_line),
-                SetForegroundColor(Color::Yellow),
-                Print(format!("INPUT: {}", self.debug_info)),
-                crossterm::terminal::Clear(crossterm::terminal::ClearType::UntilNewLine),
-                ResetColor
-            )?;
-            debug_line += 1;
-        }
-
-        if !self.cpu_debug_info.is_empty() {
-            queue!(
-                stdout(),
-                MoveTo(offset_x, debug_line),
-                SetForegroundColor(Color::Cyan),
-                Print(format!("CPU: {}", self.cpu_debug_info)),
-                crossterm::terminal::Clear(crossterm::terminal::ClearType::UntilNewLine),
-                ResetColor
-            )?;
-            debug_line += 1;
-        }
-
-        if !self.current_instruction_debug.is_empty() {
-            queue!(
-                stdout(),
-                MoveTo(offset_x, debug_line),
-                SetForegroundColor(Color::Magenta),
-                Print(format!("INST: {}", self.current_instruction_debug)),
-                crossterm::terminal::Clear(crossterm::terminal::ClearType::UntilNewLine),
-                ResetColor
-            )?;
-            debug_line += 1;
-        }
-
-        if !self.step_mode_prompt.is_empty() {
-            queue!(
-                stdout(),
-                MoveTo(offset_x, debug_line),
-                SetForegroundColor(Color::Green),
-                Print(format!("{}", self.step_mode_prompt)),
-                crossterm::terminal::Clear(crossterm::terminal::ClearType::UntilNewLine),
-                ResetColor
-            )?;
+        if let Some(ref debug) = self.debug_info {
+            self.render_debug_info(debug, offset_x, offset_y + display_height + 1)?;
         }
 
         stdout().flush()?;
         Ok(())
+    }
+
+    fn render_debug_info(
+        &self,
+        debug: &DebugInfo,
+        offset_x: u16,
+        start_y: u16,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use crossterm::style::*;
+
+        let mut debug_line = start_y;
+
+        // Render key state
+        self.render_debug_line(
+            &self.format_key_state(debug),
+            Color::Yellow,
+            "INPUT",
+            offset_x,
+            debug_line,
+        )?;
+        debug_line += 1;
+
+        // Render CPU state
+        self.render_debug_line(
+            &self.format_cpu_state(debug),
+            Color::Cyan,
+            "CPU",
+            offset_x,
+            debug_line,
+        )?;
+        debug_line += 1;
+
+        // Render current instruction
+        self.render_debug_line(
+            &self.format_instruction(debug),
+            Color::Magenta,
+            "INST",
+            offset_x,
+            debug_line,
+        )?;
+        debug_line += 1;
+
+        // Render playback mode
+        self.render_debug_line(
+            &self.format_playback_mode(debug),
+            Color::Green,
+            "Mode",
+            offset_x,
+            debug_line,
+        )?;
+
+        Ok(())
+    }
+
+    fn render_debug_line(
+        &self,
+        content: &str,
+        color: crossterm::style::Color,
+        prefix: &str,
+        offset_x: u16,
+        y: u16,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use crossterm::{cursor::*, queue, style::*};
+        use std::io::stdout;
+
+        queue!(
+            stdout(),
+            MoveTo(offset_x, y),
+            SetForegroundColor(color),
+            Print(format!("{}: {}", prefix, content)),
+            crossterm::terminal::Clear(crossterm::terminal::ClearType::UntilNewLine),
+            ResetColor
+        )?;
+        Ok(())
+    }
+
+    fn format_key_state(&self, debug: &DebugInfo) -> String {
+        debug.key_state.format_pressed_keys()
+    }
+
+    fn format_cpu_state(&self, debug: &DebugInfo) -> String {
+        format!(
+            "I: 0x{:03X} | DT: {} | ST: {} | V0-F: [{:02X},{:02X},{:02X},{:02X},{:02X},{:02X},{:02X},{:02X},{:02X},{:02X},{:02X},{:02X},{:02X},{:02X},{:02X},{:02X}]",
+            debug.index_register,
+            debug.delay_timer,
+            debug.sound_timer,
+            debug.registers[0],
+            debug.registers[1],
+            debug.registers[2],
+            debug.registers[3],
+            debug.registers[4],
+            debug.registers[5],
+            debug.registers[6],
+            debug.registers[7],
+            debug.registers[8],
+            debug.registers[9],
+            debug.registers[10],
+            debug.registers[11],
+            debug.registers[12],
+            debug.registers[13],
+            debug.registers[14],
+            debug.registers[15]
+        )
+    }
+
+    fn format_instruction(&self, debug: &DebugInfo) -> String {
+        format!(
+            "PC: 0x{:03X} | Raw: {} | {}",
+            debug.current_pc, debug.raw_instruction, debug.decoded_instruction
+        )
+    }
+
+    fn format_playback_mode(&self, debug: &DebugInfo) -> String {
+        match debug.playback_mode {
+            PlaybackMode::Running => "Running",
+            PlaybackMode::Paused => "Paused",
+            PlaybackMode::Stepping => "Stepping",
+        }
+        .to_string()
     }
 }
 

@@ -39,6 +39,11 @@ impl CPU {
         return self.gen_r[reg.get() as usize];
     }
 
+    // All values in the register (for debug)
+    pub fn all_register_val(&self) -> [u8; Self::REGISTER_COUNT] {
+        self.gen_r.clone()
+    }
+
     // Set value of CPU register
     pub fn register_set(&mut self, reg: &Register, value: u8) {
         self.gen_r[reg.get() as usize] = value;
@@ -114,6 +119,10 @@ impl CPU {
 
     pub fn set_sound_timer(&mut self, value: u8) {
         self.sound_timer = value;
+    }
+
+    pub fn get_sound_timer(&self) -> u8 {
+        self.sound_timer
     }
 
     // Stack operations
