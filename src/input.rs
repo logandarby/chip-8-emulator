@@ -227,9 +227,9 @@ impl KeyEventHandler {
                 Ok(Some(Event::Key(key_event))) => {
                     if let Some(key_event) = self.handle_key_event(key_event) {
                         return key_event;
+                    } else {
+                        continue;
                     }
-                    tokio::time::sleep(rate).await;
-                    continue;
                 }
                 _ => {
                     tokio::time::sleep(rate).await;
