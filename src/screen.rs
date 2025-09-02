@@ -45,14 +45,15 @@ impl Screen {
     }
 
     pub fn get_pixel(&self, x: u8, y: u8) -> Option<bool> {
-        if x >= Self::N_COLS.into() || y >= Self::N_ROWS.into() {
-            return None;
+        if x >= Self::N_COLS || y >= Self::N_ROWS {
+            None
+        } else {
+            Some(self.pixels[Self::get_idx(x, y)])
         }
-        return Some(self.pixels[Self::get_idx(x, y)]);
     }
 
     pub fn set_pixel(&mut self, x: u8, y: u8, value: bool) {
-        if x >= Self::N_COLS.into() || y >= Self::N_ROWS.into() {
+        if x >= Self::N_COLS || y >= Self::N_ROWS {
             return;
         }
         self.pixels[Self::get_idx(x, y)] = value;
@@ -252,7 +253,7 @@ impl Screen {
     fn get_idx(x: u8, y: u8) -> usize {
         assert!(x < Self::N_COLS, "X screen index is out of bounds");
         assert!(y < Self::N_ROWS, "Y screen index is out of bounds");
-        return y as usize * Self::N_COLS as usize + x as usize;
+        y as usize * Self::N_COLS as usize + x as usize
     }
 }
 

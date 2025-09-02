@@ -40,7 +40,7 @@ struct Args {
 
     #[arg(
         long,
-        default_value_t = Chip8Version::COSMAC,
+        default_value_t = Chip8Version::Cosmac,
         help = "CHIP-8 version: cosmac, chip48, or superchip"
     )]
     version: Chip8Version,

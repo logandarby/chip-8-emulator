@@ -1,5 +1,6 @@
 use crate::primitive::*;
 
+#[allow(clippy::upper_case_acronyms)]
 pub struct CPU {
     memory: [u8; Self::MEMORY_SIZE],   // This CPU also has memory lol
     pc_r: u16,                         // Program Counter
@@ -17,7 +18,7 @@ impl CPU {
     pub const INSTRUCTION_SIZE_B: u16 = 2; // Each instruction is 2 bytes
 
     pub fn new() -> Self {
-        return Self {
+        Self {
             memory: [0; Self::MEMORY_SIZE],
             index_r: 0,
             gen_r: [0; Self::REGISTER_COUNT],
@@ -26,22 +27,22 @@ impl CPU {
             sound_timer: 0,
             pc_r: 0,
             waiting_for_key: None,
-        };
+        }
     }
 
     // Return a reference to the value of the VF register
     pub fn vf(&mut self) -> &mut u8 {
-        return &mut self.gen_r[Self::REGISTER_COUNT - 1];
+        &mut self.gen_r[Self::REGISTER_COUNT - 1]
     }
 
     // Value of CPU register
     pub fn register_val(&self, reg: &Register) -> u8 {
-        return self.gen_r[reg.get() as usize];
+        self.gen_r[reg.get() as usize]
     }
 
     // All values in the register (for debug)
     pub fn all_register_val(&self) -> [u8; Self::REGISTER_COUNT] {
-        self.gen_r.clone()
+        self.gen_r
     }
 
     // Set value of CPU register
@@ -51,7 +52,7 @@ impl CPU {
 
     // Load value from address in memory
     pub fn load_from_addr(&self, addr: u16) -> u8 {
-        return self.memory[addr as usize];
+        self.memory[addr as usize]
     }
 
     // Store value in memory at address
@@ -62,10 +63,11 @@ impl CPU {
     pub fn store_memory_slice(&mut self, start: usize, bytes: &[u8]) -> Result<(), ()> {
         let end = start + bytes.len();
         if end > self.memory.len() {
-            return Err(());
+            Err(())
+        } else {
+            self.memory[start..end].copy_from_slice(bytes);
+            Ok(())
         }
-        self.memory[start..end].copy_from_slice(bytes);
-        return Ok(());
     }
 
     // Increment the Program Counter
@@ -82,10 +84,10 @@ impl CPU {
     }
 
     pub fn fetch_current_instruction(&self) -> RawInstruction {
-        return RawInstruction::new(
+        RawInstruction::new(
             self.memory[self.pc_r as usize],
             self.memory[self.pc_r as usize + 1],
-        );
+        )
     }
 
     pub fn get_index(&self) -> u16 {

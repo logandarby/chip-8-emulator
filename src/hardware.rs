@@ -37,12 +37,12 @@ impl Hardware {
     }
 
     pub fn set_key_state(&mut self, key_state: &Chip8KeyState) {
-        self.key_state = key_state.clone();
+        self.key_state = *key_state;
     }
 
     pub fn handle_key_when_waiting(&mut self, key: u8, kind: Chip8KeyEventKind) -> bool {
         if let Some(reg) = self.cpu.stop_waiting_for_key() {
-            let expected_kind = if self.config.version == Chip8Version::COSMAC {
+            let expected_kind = if self.config.version == Chip8Version::Cosmac {
                 Chip8KeyEventKind::Release
             } else {
                 Chip8KeyEventKind::Press
@@ -84,14 +84,14 @@ impl Hardware {
                 self.execute_draw(regx, regy, row_count);
             }
             LoadAddr(reg) => {
-                if self.config.version == Chip8Version::COSMAC {
+                if self.config.version == Chip8Version::Cosmac {
                     self.cpu.load_registers_cosmac(reg);
                 } else {
                     self.cpu.load_registers(reg);
                 }
             }
             StoreAddr(reg) => {
-                if self.config.version == Chip8Version::COSMAC {
+                if self.config.version == Chip8Version::Cosmac {
                     self.cpu.store_registers_cosmac(reg);
                 } else {
                     self.cpu.store_registers(reg);
@@ -103,7 +103,7 @@ impl Hardware {
                 self.cpu.set_index(font_addr);
             }
             JumpWithOffset(addr) => {
-                let addr_to_jump = if self.config.version == Chip8Version::COSMAC {
+                let addr_to_jump = if self.config.version == Chip8Version::Cosmac {
                     addr.get() + self.cpu.register_val(&Register::new(0).unwrap()) as u16
                 } else {
                     // Strange quirk in newer interpreters where the addr was interpreted as XNN
@@ -168,13 +168,13 @@ impl Hardware {
             RegOperation::Set => {
                 self.cpu.register_set(regx, vy);
             }
-            RegOperation::OR => {
+            RegOperation::Or => {
                 self.cpu.register_set(regx, vx | vy);
             }
-            RegOperation::XOR => {
+            RegOperation::Xor => {
                 self.cpu.register_set(regx, vx ^ vy);
             }
-            RegOperation::AND => {
+            RegOperation::And => {
                 self.cpu.register_set(regx, vx & vy);
             }
             RegOperation::Add => {
@@ -193,7 +193,7 @@ impl Hardware {
                 *self.cpu.vf() = if vy > vx { 1 } else { 0 };
             }
             RegOperation::ShiftLeft => {
-                let val = if self.config.version == Chip8Version::COSMAC {
+                let val = if self.config.version == Chip8Version::Cosmac {
                     self.cpu.register_set(regx, vy);
                     vy
                 } else {
@@ -203,7 +203,7 @@ impl Hardware {
                 self.cpu.register_set(regx, val << 1);
             }
             RegOperation::ShiftRight => {
-                let val = if self.config.version == Chip8Version::COSMAC {
+                let val = if self.config.version == Chip8Version::Cosmac {
                     self.cpu.register_set(regx, vy);
                     vy
                 } else {

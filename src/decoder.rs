@@ -37,9 +37,9 @@ impl Decoder {
             (0x8, _, _, op) => {
                 let reg_op: RegOperation = match op {
                     0x0 => RegOperation::Set,
-                    0x1 => RegOperation::OR,
-                    0x2 => RegOperation::AND,
-                    0x3 => RegOperation::XOR,
+                    0x1 => RegOperation::Or,
+                    0x2 => RegOperation::And,
+                    0x3 => RegOperation::Xor,
                     0x4 => RegOperation::Add,
                     0x5 => RegOperation::Sub,
                     0x7 => RegOperation::SubInv,

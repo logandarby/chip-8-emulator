@@ -8,9 +8,9 @@ use crate::scheduler::*;
 
 #[derive(Clone, Debug, PartialEq, clap::ValueEnum)]
 pub enum Chip8Version {
-    COSMAC,
-    CHIP48,
-    SUPERCHIP,
+    Cosmac,
+    Chip48,
+    Superchip,
 }
 
 impl std::fmt::Display for Chip8Version {
@@ -20,9 +20,9 @@ impl std::fmt::Display for Chip8Version {
             f,
             "{}",
             match self {
-                COSMAC => "cosmac",
-                CHIP48 => "chip48",
-                SUPERCHIP => "superchip",
+                Cosmac => "cosmac",
+                Chip48 => "chip48",
+                Superchip => "superchip",
             }
         )
     }
@@ -84,7 +84,7 @@ impl Chip8 {
 
     // Loads a program `bytes` into ROM starting at the entry point, and gets CPU ready for
     // execution
-    pub fn load_rom(&mut self, bytes: &Vec<u8>) -> Result<(), ()> {
+    pub fn load_rom(&mut self, bytes: &[u8]) -> Result<(), ()> {
         // Load Fonts into memory
         self.hardware
             .cpu
@@ -101,7 +101,7 @@ impl Chip8 {
     }
 
     // Dumps the instructions contained in the bytes to stdio in a readible format
-    pub fn dump_inst(bytes: &Vec<u8>) {
+    pub fn dump_inst(bytes: &[u8]) {
         println!("Dumping instruction hex codes:");
         bytes
             .chunks_exact(CPU::INSTRUCTION_SIZE_B.into())

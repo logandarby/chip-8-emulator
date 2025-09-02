@@ -113,9 +113,9 @@ impl Display for RawInstruction {
 #[derive(Clone, Debug)]
 pub enum RegOperation {
     Set,
-    OR,
-    AND,
-    XOR,
+    Or,
+    And,
+    Xor,
     Add,
     Sub,
     SubInv,
@@ -128,9 +128,9 @@ impl Display for RegOperation {
         use RegOperation::*;
         let op = match self {
             Set => "=",
-            OR => "|",
-            AND => "&",
-            XOR => "^",
+            Or => "|",
+            And => "&",
+            Xor => "^",
             Add => "+",
             SubInv | Sub => "-",
             ShiftLeft => "<<",
@@ -212,7 +212,7 @@ impl Display for Instruction {
                 match regop {
                     Set => write!(f, "{regx} {regop} {regy}"),
                     // Equal
-                    AND | OR | XOR | Add | Sub => write!(f, "{regx} = {regx} {regop} {regy}"),
+                    And | Or | Xor | Add | Sub => write!(f, "{regx} = {regx} {regop} {regy}"),
                     SubInv => write!(f, "{regx} = {regy} {regop} {regx}"),
                     // Implementation Dependent
                     ShiftLeft => write!(f, "Shift Left on {regx} {regy}"),

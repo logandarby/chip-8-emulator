@@ -201,14 +201,13 @@ impl ScreenScheduler {
             exec_interval.tick().await;
 
             // Update debug info if enabled
-            if debug_enabled {
-                if hardware_sender
+            if debug_enabled
+                && hardware_sender
                     .send(HardwareMessage::UpdateDebugInfo)
                     .await
                     .is_err()
-                {
-                    break;
-                }
+            {
+                break;
             }
 
             if hardware_sender
@@ -241,7 +240,7 @@ impl SoundScheduler {
             }
         };
 
-        let sink = Sink::connect_new(&stream_handle.mixer());
+        let sink = Sink::connect_new(stream_handle.mixer());
 
         let mut timer_check_interval = interval(util::hertz(self.hz));
         let mut current_timer_value = 0u8;
@@ -339,12 +338,13 @@ impl InputScheduler {
 
                     // Update hardware key state (for SkipKeyPress instructions)
                     let _ = hardware_sender
-                        .send(HardwareMessage::UpdateKeyState(self.key_state.clone()))
+                        .send(HardwareMessage::UpdateKeyState(self.key_state))
                         .await;
                 }
-                Chip8InputEvent::CommandEvent { command, kind }
-                    if kind == Chip8KeyEventKind::Press =>
-                {
+                Chip8InputEvent::CommandEvent {
+                    command,
+                    kind: Chip8KeyEventKind::Press,
+                } => {
                     match command {
                         Chip8Command::Quit => {
                             let _ = clock_sender.send(ClockControlMessage::Shutdown).await;
