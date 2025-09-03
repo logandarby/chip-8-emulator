@@ -11,16 +11,17 @@ pub struct HardwareExecutionConfig {
 }
 
 // Manages the internal state of the CPU and the Screen
-pub struct Hardware {
+pub struct Hardware<'a> {
     pub cpu: CPU,
     pub screen: Screen,
     key_state: Chip8KeyState,
     config: HardwareExecutionConfig,
     playback_state: PlaybackMode,
     playback_receiver: Option<tokio::sync::mpsc::Receiver<PlaybackMode>>,
+    rom_ref: Option<&'a [u8]>,
 }
 
-impl Hardware {
+impl<'a> Hardware<'a> {
     pub fn new(config: HardwareExecutionConfig) -> Self {
         Self {
             cpu: CPU::new(),
@@ -29,6 +30,7 @@ impl Hardware {
             config,
             playback_state: PlaybackMode::Running,
             playback_receiver: None,
+            rom_ref: None,
         }
     }
 
@@ -61,6 +63,28 @@ impl Hardware {
 
     pub fn is_waiting_for_key(&self) -> bool {
         self.cpu.is_waiting_for_key()
+    }
+
+    pub fn load_rom(&mut self, bytes: &'a [u8]) -> Result<(), ()> {
+        // Load Fonts into memory
+        self.cpu
+            .store_memory_slice(Chip8::FONT_START_ADDR as usize, &Chip8::FONT)
+            .expect("Fonts should fit into memory");
+        // Load ROM into memory
+        self.cpu
+            .store_memory_slice(Chip8::ENTRY_POINT.into(), bytes)?;
+        self.cpu.jump_to(&Address::new(Chip8::ENTRY_POINT).unwrap());
+        self.rom_ref = Some(bytes);
+        Ok(())
+    }
+
+    pub fn restart_rom(&mut self) {
+        self.cpu.reset();
+        self.screen.clear();
+        self.screen.flush().unwrap();
+        if let Some(rom_ref) = self.rom_ref {
+            let _ = self.load_rom(rom_ref);
+        }
     }
 
     pub async fn execute_instruction(&mut self, inst: &Instruction) {

@@ -2,10 +2,10 @@ use crate::primitive::*;
 
 #[allow(clippy::upper_case_acronyms)]
 pub struct CPU {
-    memory: [u8; Self::MEMORY_SIZE],   // This CPU also has memory lol
+    memory: [u8; CPU::MEMORY_SIZE],    // This CPU also has memory lol
     pc_r: u16,                         // Program Counter
     index_r: u16,                      // Index Register
-    gen_r: [u8; Self::REGISTER_COUNT], // General Purpose Registers
+    gen_r: [u8; CPU::REGISTER_COUNT],  // General Purpose Registers
     stack: Vec<u16>,                   // Stack
     delay_timer: u8,                   // Delay Timer
     sound_timer: u8,                   // Sound Timer
@@ -17,17 +17,23 @@ impl CPU {
     pub const REGISTER_COUNT: usize = 16; // 16 General Purpose Registers
     pub const INSTRUCTION_SIZE_B: u16 = 2; // Each instruction is 2 bytes
 
+    const DEFAULT_CPU: Self = Self {
+        memory: [0; Self::MEMORY_SIZE],
+        index_r: 0,
+        gen_r: [0; Self::REGISTER_COUNT],
+        stack: Vec::new(),
+        delay_timer: 0,
+        sound_timer: 0,
+        pc_r: 0,
+        waiting_for_key: None,
+    };
+
     pub fn new() -> Self {
-        Self {
-            memory: [0; Self::MEMORY_SIZE],
-            index_r: 0,
-            gen_r: [0; Self::REGISTER_COUNT],
-            stack: Vec::new(),
-            delay_timer: 0,
-            sound_timer: 0,
-            pc_r: 0,
-            waiting_for_key: None,
-        }
+        Self::DEFAULT_CPU
+    }
+
+    pub fn reset(&mut self) {
+        *self = Self::DEFAULT_CPU;
     }
 
     // Return a reference to the value of the VF register
@@ -41,7 +47,7 @@ impl CPU {
     }
 
     // All values in the register (for debug)
-    pub fn all_register_val(&self) -> [u8; Self::REGISTER_COUNT] {
+    pub fn all_register_val(&self) -> [u8; CPU::REGISTER_COUNT] {
         self.gen_r
     }
 

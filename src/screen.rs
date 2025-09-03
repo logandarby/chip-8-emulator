@@ -116,7 +116,7 @@ impl Screen {
                 MoveTo(offset_x, offset_y.saturating_sub(2)),
                 Print("CHIP-8 Emulator"),
                 MoveTo(offset_x, offset_y + display_height + 1),
-                Print("Press 'Escape' to quit")
+                Print("Press 'Escape' to quit, Press 'P' to restart")
             )?;
         }
 

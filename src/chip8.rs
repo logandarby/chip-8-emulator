@@ -34,16 +34,16 @@ pub struct Chip8Config {
     pub debug: bool,
 }
 
-pub struct Chip8 {
+pub struct Chip8<'a> {
     // Config
     pub config: Chip8Config,
     // CPU & Screen
-    pub hardware: Hardware,
+    pub hardware: Hardware<'a>,
     // Input,
     pub input: KeyEventHandler,
 }
 
-impl Chip8 {
+impl<'a> Chip8<'a> {
     pub const ENTRY_POINT: u16 = 0x200; // Where a program is expected to start
     pub const CPU_FREQ_HZ: f64 = 500.0;
     pub const TIMER_HZ: f64 = 60.0;
@@ -84,19 +84,8 @@ impl Chip8 {
 
     // Loads a program `bytes` into ROM starting at the entry point, and gets CPU ready for
     // execution
-    pub fn load_rom(&mut self, bytes: &[u8]) -> Result<(), ()> {
-        // Load Fonts into memory
-        self.hardware
-            .cpu
-            .store_memory_slice(Self::FONT_START_ADDR as usize, &Self::FONT)
-            .expect("Fonts should fit into memory");
-        // Load ROM into memory
-        self.hardware
-            .cpu
-            .store_memory_slice(Self::ENTRY_POINT.into(), bytes)?;
-        self.hardware
-            .cpu
-            .jump_to(&Address::new(Self::ENTRY_POINT).unwrap());
+    pub fn load_rom(&mut self, bytes: &'a [u8]) -> Result<(), ()> {
+        self.hardware.load_rom(bytes)?;
         Ok(())
     }
 
@@ -119,14 +108,14 @@ impl Chip8 {
             });
     }
 
-    pub async fn cycle(&mut self) {
+    pub async fn run(&mut self) {
         crossterm::terminal::enable_raw_mode().unwrap();
         Chip8Orchaestrator::run(self).await;
         crossterm::terminal::disable_raw_mode().unwrap();
     }
 }
 
-impl Drop for Chip8 {
+impl Drop for Chip8<'_> {
     fn drop(&mut self) {
         crossterm::terminal::disable_raw_mode().unwrap();
     }

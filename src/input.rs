@@ -180,6 +180,7 @@ pub enum Chip8KeyEventKind {
 #[derive(Debug)]
 pub enum Chip8Command {
     Quit,
+    Restart,
     DebugStep,
     DebugPlayPause,
 }
@@ -258,6 +259,7 @@ impl KeyEventHandler {
                 KeyCode::Esc => Chip8Command::Quit,
                 KeyCode::Char(' ') => Chip8Command::DebugPlayPause,
                 KeyCode::Enter => Chip8Command::DebugStep,
+                KeyCode::Char('p') => Chip8Command::Restart,
                 _ => return None,
             };
             Some(Chip8InputEvent::CommandEvent {

@@ -3,3 +3,4 @@ Resources References:
 - Detailed Spec: http://devernay.free.fr/hacks/chip8/C8TECH10.HTM
 - Rom List: https://github.com/stewlab/chip8-roms/tree/master
 - Another ROM list: https://github.com/tamato/chip8-roms/blob/master/games/Brick%20(Brix%20hack%2C%201990).ch8
+- Revival Studios https://revival-studios.com/other.php#c8astro

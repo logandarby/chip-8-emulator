@@ -28,6 +28,7 @@ pub enum HardwareMessage {
     FlushScreen,
     UpdateDebugInfo,
     CheckSoundTimer,
+    RestartROM,
 }
 
 pub enum SoundMessage {
@@ -37,7 +38,7 @@ pub enum SoundMessage {
 
 impl HardwareScheduler {
     pub async fn run(
-        hardware: &mut Hardware,
+        hardware: &mut Hardware<'_>,
         mut inbox: mpsc::Receiver<HardwareMessage>,
         sound_sender: Option<mpsc::Sender<SoundMessage>>,
     ) {
@@ -76,6 +77,9 @@ impl HardwareScheduler {
                         let timer_value = hardware.cpu.get_sound_timer();
                         let _ = sender.send(SoundMessage::TimerState(timer_value)).await;
                     }
+                }
+                RestartROM => {
+                    hardware.restart_rom();
                 }
             }
         }
@@ -319,6 +323,7 @@ impl InputScheduler {
         input: &KeyEventHandler,
         hardware_sender: mpsc::Sender<HardwareMessage>,
         clock_sender: mpsc::Sender<ClockControlMessage>,
+        debug: bool,
     ) {
         loop {
             let input_event = input.next_input_event().await;
@@ -349,14 +354,18 @@ impl InputScheduler {
                         Chip8Command::Quit => {
                             let _ = clock_sender.send(ClockControlMessage::Shutdown).await;
                         }
-                        Chip8Command::DebugPlayPause => {
+                        Chip8Command::DebugPlayPause if debug => {
                             let _ = clock_sender
                                 .send(ClockControlMessage::TogglePausePlay)
                                 .await;
                         }
-                        Chip8Command::DebugStep => {
+                        Chip8Command::DebugStep if debug => {
                             let _ = clock_sender.send(ClockControlMessage::Step).await;
                         }
+                        Chip8Command::Restart => {
+                            let _ = hardware_sender.send(HardwareMessage::RestartROM).await;
+                        }
+                        _ => {}
                     };
                 }
                 _ => {}
@@ -368,7 +377,7 @@ impl InputScheduler {
 pub struct Chip8Orchaestrator;
 
 impl Chip8Orchaestrator {
-    pub async fn run(chip8: &mut Chip8) {
+    pub async fn run(chip8: &mut Chip8<'_>) {
         // Comm channels
         let (hard_send, hard_recv) = mpsc::channel::<HardwareMessage>(100);
         let (clock_send, clock_recv) = mpsc::channel::<ClockControlMessage>(100);
@@ -404,7 +413,7 @@ impl Chip8Orchaestrator {
             _ = screen_scheulder.run(hard_send.clone(), chip8.config.debug) => {},
             _ = sound_scheduler.run(sound_recv, hard_send.clone()) => {},
             _ = HardwareScheduler::run(&mut chip8.hardware, hard_recv, Some(sound_send.clone())) => {},
-            _ = input_scheduler.run(&chip8.input, hard_send, clock_send) => {},
+            _ = input_scheduler.run(&chip8.input, hard_send, clock_send, chip8.config.debug) => {},
         }
     }
 }

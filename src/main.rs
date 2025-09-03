@@ -73,7 +73,7 @@ async fn main() -> io::Result<()> {
     };
     let mut chip8 = Chip8::new(config, input_handler);
     chip8.load_rom(&bytes).expect("Could not load the ROM");
-    chip8.cycle().await;
+    chip8.run().await;
 
     Ok(())
 }
