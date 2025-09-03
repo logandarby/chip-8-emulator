@@ -26,7 +26,54 @@ pub struct DebugInfo {
     pub playback_mode: PlaybackMode,
 }
 
+macro_rules! screen_color {
+    (
+        pub enum $name:ident {
+            $($variant:ident),* $(,)?
+        }
+    ) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+        pub enum $name {
+            $($variant,)*
+        }
+
+        impl From<$name> for crossterm::style::Color {
+            fn from(screen_color: $name) -> Self {
+                match screen_color {
+                    $($name::$variant => crossterm::style::Color::$variant,)*
+                }
+            }
+        }
+    };
+}
+
+screen_color!(
+    pub enum ScreenColor {
+        Red,
+        DarkRed,
+        Green,
+        DarkGreen,
+        Yellow,
+        DarkYellow,
+        Blue,
+        DarkBlue,
+        Magenta,
+        DarkMagenta,
+        Cyan,
+        DarkCyan,
+        White,
+        Grey,
+    }
+);
+
+impl ToString for ScreenColor {
+    fn to_string(&self) -> String {
+        format!("{:#?}", self).to_lowercase()
+    }
+}
+
 pub struct Screen {
+    pub color: ScreenColor,
     pixels: [bool; Self::N_PIXELS as usize],
     debug_info: Option<DebugInfo>,
 }
@@ -36,11 +83,12 @@ impl Screen {
     pub const N_COLS: u8 = 64;
     pub const N_PIXELS: u16 = Self::N_ROWS as u16 * Self::N_COLS as u16;
 
-    pub fn new() -> Self {
+    pub fn new(color: ScreenColor) -> Self {
         execute!(std::io::stdout(), EnterAlternateScreen, Hide).expect("Could not create terminal");
         Self {
             pixels: [false; Self::N_PIXELS as usize],
             debug_info: None,
+            color,
         }
     }
 
@@ -101,7 +149,7 @@ impl Screen {
             for x in 0..Screen::N_COLS {
                 let pixel = self.get_pixel(x, y).unwrap();
                 if pixel {
-                    queue!(stdout(), SetBackgroundColor(Color::Green), Print("  "))?;
+                    queue!(stdout(), SetBackgroundColor(self.color.into()), Print("  "))?;
                 } else {
                     queue!(stdout(), SetBackgroundColor(Color::Black), Print("  "))?;
                 }

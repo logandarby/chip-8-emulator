@@ -5,6 +5,7 @@ use crate::hardware::HardwareExecutionConfig;
 use crate::input::KeyEventHandler;
 use crate::primitive::*;
 use crate::scheduler::*;
+use crate::screen::ScreenColor;
 
 #[derive(Clone, Debug, PartialEq, clap::ValueEnum)]
 pub enum Chip8Version {
@@ -32,6 +33,7 @@ impl std::fmt::Display for Chip8Version {
 pub struct Chip8Config {
     pub version: Chip8Version,
     pub debug: bool,
+    pub color: ScreenColor,
 }
 
 pub struct Chip8<'a> {
@@ -77,6 +79,7 @@ impl<'a> Chip8<'a> {
             config: config.clone(),
             hardware: Hardware::new(HardwareExecutionConfig {
                 version: config.version,
+                screen_color: config.color,
             }),
             input: input_handler,
         }

@@ -3,11 +3,12 @@ use crate::cpu::CPU;
 use crate::input::{Chip8KeyEventKind, Chip8KeyState};
 use crate::primitive::*;
 use crate::scheduler::PlaybackMode;
-use crate::screen::{DebugInfo, Screen};
+use crate::screen::{DebugInfo, Screen, ScreenColor};
 
 #[derive(Debug, Clone)]
 pub struct HardwareExecutionConfig {
     pub version: Chip8Version,
+    pub screen_color: ScreenColor,
 }
 
 // Manages the internal state of the CPU and the Screen
@@ -25,7 +26,7 @@ impl<'a> Hardware<'a> {
     pub fn new(config: HardwareExecutionConfig) -> Self {
         Self {
             cpu: CPU::new(),
-            screen: Screen::new(),
+            screen: Screen::new(config.screen_color),
             key_state: Chip8KeyState::default(),
             config,
             playback_state: PlaybackMode::Running,

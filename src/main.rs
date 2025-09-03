@@ -18,6 +18,8 @@ mod util;
 use chip8::*;
 use clap::Parser;
 
+use crate::screen::ScreenColor;
+
 #[derive(Parser)]
 #[command(name = "chip8-emulator")]
 #[command(about = "A CHIP-8 emulator written in Rust")]
@@ -44,6 +46,13 @@ struct Args {
         help = "CHIP-8 version: cosmac, chip48, or superchip"
     )]
     version: Chip8Version,
+
+    #[arg(
+        long,
+        default_value_t = ScreenColor::Green,
+        help = "Color of the emulation"
+    )]
+    color: ScreenColor,
 }
 
 #[tokio::main]
@@ -70,6 +79,7 @@ async fn main() -> io::Result<()> {
     let config = Chip8Config {
         version: args.version,
         debug: args.debug,
+        color: args.color,
     };
     let mut chip8 = Chip8::new(config, input_handler);
     chip8.load_rom(&bytes).expect("Could not load the ROM");
