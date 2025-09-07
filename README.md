@@ -13,7 +13,7 @@ Play games like it's the 1970s using the Chip8 interpreted language, right in th
 
 - Run Chip8 ROMs in your terminal of choice
 - Customizable color, input-bindings, and Chip8 version
-- Asynchronous runtime using message-passing architecture to emulate seperate components accurately
+- Asynchronous (amost) event-driven runtime using message-passing architecture to emulate seperate components accurately
 - Debug feature with CPU state, keybinding state, debug instruction stepping, and debug pause/play
 - ROM dissassembly
 
